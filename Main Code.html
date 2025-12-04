@@ -1,0 +1,1723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ananta Horizon Trading Journal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        :root {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom styles for the professional PDF report template */
+        .report-grid-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 60px; /* Enforces uniform height */
+            border: 1px solid #e5e7eb; /* Light gray border */
+            padding: 8px;
+            text-align: center;
+        }
+        /* Style for the full history report table inside the template */
+        .history-report-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 10px;
+        }
+        .history-report-table th, .history-report-table td {
+            border: 1px solid #e5e7eb;
+            padding: 6px 8px; /* Increased padding slightly for readability */
+            text-align: left;
+            color: #111827; /* Darker text for readability */
+        }
+        .history-report-table th {
+            background-color: #f3f4f6;
+            font-weight: 800; /* Extra bold headers */
+            color: #000;
+            text-transform: uppercase;
+        }
+        /* Metric Card Styling */
+        .metric-card {
+            padding: 1rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        }
+        .tab-button.active {
+            border-bottom: 3px solid #4f46e5;
+            color: #4f46e5;
+            font-weight: 600;
+        }
+        
+        /* New CSS for consistent alignment across all tables */
+        .table-center { text-align: center; }
+        .table-right { text-align: right; }
+        .table-left { text-align: left; }
+
+        /* Modal backdrop for confirmation */
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.75);
+        }
+    </style>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInWithEmailAndPassword, 
+            signInWithCustomToken, 
+            signInAnonymously, // Added signInAnonymously
+            onAuthStateChanged, 
+            setPersistence, 
+            browserSessionPersistence,
+            signOut 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // Import setDoc for updating documents
+        import { getFirestore, doc, setDoc, addDoc, onSnapshot, collection, query, deleteDoc, serverTimestamp as originalServerTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- START: CONFIGURATION BLOCK (Using Canvas Globals with Fallback) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'secure-trading-journal';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            // FALLBACK CONFIGURATION (REPLACE WITH REAL CONFIG IF NOT IN CANVAS)
+            apiKey: "AIzaSyBmCTiCKFFgKvJdsSJ6qBXDhRb_va-NpG4", 
+            authDomain: "trading-journal-web-308a4.firebaseapp.com",
+            projectId: "trading-journal-web-308a4",
+            storageBucket: "trading-journal-web-308a4.firebasestorage.app",
+            messagingSenderId: "123769414748",
+            appId: "1:123769414748:web:92b80e6e280218676ef299"
+        };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Fallback for serverTimestamp if DB init fails
+        const serverTimestamp = () => {
+             console.warn("Using local fallback timestamp.");
+             return { seconds: Math.floor(Date.now() / 1000) };
+        };
+        // --- END: CONFIGURATION BLOCK ---
+
+
+        // Global variables 
+        let app, db, auth, userId;
+        let isAuthReady = false;
+        let currentTrades = [];
+        let performanceMetrics = {};
+        let monthlySummaries = {};
+        let selectedTradeIds = new Set(); // Global tracker for batch deletion
+        
+        // --- CORE HELPER FUNCTIONS (MUST BE DEFINED EARLY) ---
+
+        const COMMISSION_RATES = {
+            'AUD/USD': 7.00, 'EUR/JPY': 10.00, 'EUR/USD': 7.00, 'GBP/JPY': 15.00,
+            'GBP/USD': 9.00, 'USD/CAD': 8.00, 'USD/CHF': 10.25, 'USD/JPY': 7.00,
+            'USOIL': 12.50, 'XAU/USD': 11.00, 'DEFAULT': 10.00 
+        };
+
+        function formatDateDDMMYYYY(dateTimeString) {
+            const date = new Date(dateTimeString);
+            if (isNaN(date)) return 'N/A';
+            const day = String(date.getDate()).padStart(2, '0');
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const year = date.getFullYear();
+            return `${day}/${month}/${year}`;
+        }
+
+        function showMessage(message, type = 'success') {
+            const container = document.getElementById('message-container');
+            const toast = document.createElement('div');
+            const baseClasses = 'p-3 rounded-xl shadow-lg mb-2 transition-opacity duration-300';
+            let specificClasses = '';
+
+            if (type === 'success') {
+                specificClasses = 'bg-green-100 text-green-800 border-green-400';
+            } else if (type === 'error') {
+                specificClasses = 'bg-red-100 text-red-800 border-red-400';
+            } else {
+                specificClasses = 'bg-blue-100 text-blue-800 border-blue-400';
+            }
+
+            toast.className = `${baseClasses} ${specificClasses}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+                toast.addEventListener('transitionend', () => toast.remove());
+            }, 4000);
+        }
+
+        function formatDuration(seconds) {
+            if (seconds === 0) return 'Instant';
+            if (seconds < 0) return 'Error';
+
+            const d = Math.floor(seconds / (3600 * 24));
+            const h = Math.floor((seconds % (3600 * 24)) / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+
+            let parts = [];
+            if (d > 0) parts.push(`${d}d`);
+            if (h > 0) parts.push(`${h}h`);
+            if (m > 0) parts.push(`${m}m`);
+            parts.push(`${s}s`); 
+
+            return parts.join(' ');
+        }
+        
+        /**
+         * Generates a unique trade ID based on the required format.
+         */
+        function generateNewTradeId(allTrades, symbol, entryDateTimeStr) {
+            const entryDate = new Date(entryDateTimeStr);
+            if (isNaN(entryDate)) {
+                return `ERROR_${Date.now()}`; // Fallback for invalid date
+            }
+
+            const year = entryDate.getFullYear();
+            const month = entryDate.getMonth();
+            const dayOfMonth = entryDate.getDate();
+            
+            const cleanSymbol = symbol.toUpperCase().replace(/\//g, '-'); 
+            const monthAbbr = entryDate.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+            const formattedDay = dayOfMonth.toString().padStart(2, '0');
+            
+            const tradesInMonth = allTrades.filter(trade => {
+                const tradeDate = trade.entryDateTime ? new Date(trade.entryDateTime) : null;
+                if (!tradeDate) return false;
+                return tradeDate.getFullYear() === year && tradeDate.getMonth() === month;
+            });
+
+            const tradesToday = tradesInMonth.filter(trade => {
+                const tradeDate = trade.entryDateTime ? new Date(trade.entryDateTime) : null;
+                if (!tradeDate) return false;
+                return tradeDate.getDate() === dayOfMonth;
+            });
+
+            const monthlySno = (tradesInMonth.length + 1).toString().padStart(2, '0');
+            const dailySno = (tradesToday.length + 1).toString().padStart(2, '0');
+
+            return `${monthlySno}${cleanSymbol}${monthAbbr}${formattedDay}${dailySno}`;
+        }
+        
+        /**
+         * Calculates Gross PNL, Net PNL, Commission, etc.
+         */
+        function calculateTradeMetrics(formData) {
+            const { symbol, position, volume, entryPrice, exitPrice, swap, entryDateTime, exitDateTime, manualGrossPnl } = formData; 
+            
+            const vol = parseFloat(volume);
+            const entry = parseFloat(entryPrice);
+            const exit = parseFloat(exitPrice);
+            const swapVal = parseFloat(swap || 0);
+            let manualPnlVal = null;
+
+            if (manualGrossPnl && !isNaN(parseFloat(manualGrossPnl))) {
+                manualPnlVal = parseFloat(manualGrossPnl);
+            }
+
+            const entryTime = new Date(entryDateTime).getTime();
+            const exitTime = new Date(exitDateTime).getTime();
+            if (exitTime <= entryTime) {
+                showMessage("Exit Date/Time must be strictly later than Entry Date/Time.", 'error');
+                return null;
+            }
+
+            const commissionRate = COMMISSION_RATES[symbol] || COMMISSION_RATES['DEFAULT'];
+            const commission = vol * commissionRate;
+
+            let grossPnl;
+            let priceDiff;
+            let pips;
+
+            if (manualPnlVal !== null) {
+                grossPnl = manualPnlVal;
+                priceDiff = position === 'Long' ? exit - entry : entry - exit;
+                pips = 'Manual';
+
+            } else {
+                priceDiff = position === 'Long' ? exit - entry : entry - exit;
+
+                let contractMultiplier = 100000; 
+                if (symbol.toUpperCase() === 'XAU/USD' || symbol.toUpperCase() === 'GOLD') {
+                    contractMultiplier = 100; 
+                } else if (symbol.toUpperCase() === 'USOIL') {
+                    contractMultiplier = 1000; 
+                } 
+                
+                let factor = 1; // Pips/Pts factor
+                if (contractMultiplier === 100000) { 
+                    factor = 10000; 
+                } else if (contractMultiplier === 100) { 
+                    factor = 1; 
+                } else if (contractMultiplier === 1000) { 
+                    factor = 100; 
+                }
+
+                grossPnl = priceDiff * vol * contractMultiplier;
+                pips = (priceDiff * factor).toFixed(2);
+            }
+            
+            const netPnl = grossPnl - commission - swapVal;
+            const result = netPnl > 0 ? 'Win' : (netPnl < 0 ? 'Loss' : 'BreakEven');
+            const durationSeconds = Math.max(0, Math.floor((exitTime - entryTime) / 1000));
+
+            return {
+                commission: commission.toFixed(2),
+                grossPnl: grossPnl.toFixed(2),
+                netPnl: netPnl.toFixed(2),
+                durationSeconds: durationSeconds,
+                duration: formatDuration(durationSeconds),
+                pips: pips, 
+                result: result 
+            };
+        }
+
+        // --- RENDERING FUNCTIONS (MUST BE DEFINED BEFORE LOGIC THAT CALLS THEM) ---
+
+        function renderHistorySummary(metrics) {
+            const summaryContainer = document.getElementById('performance-summary');
+            const winRateColor = metrics.winRate >= 50 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+            const pnlColor = metrics.totalNetPnl >= 0 ? 'text-green-700' : 'text-red-700';
+
+            summaryContainer.innerHTML = `
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="metric-card bg-gray-100 border-l-4 border-indigo-500">
+                        <p class="text-sm font-medium text-gray-500">Total Trades (This Month)</p>
+                        <p class="text-2xl font-bold text-gray-800">${metrics.totalTrades}</p>
+                    </div>
+                    <div class="metric-card ${winRateColor} border-l-4 ${metrics.winRate >= 50 ? 'border-green-500' : 'border-red-500'}">
+                        <p class="text-sm font-medium text-gray-500">Win Rate (This Month)</p>
+                        <p class="text-2xl font-bold">${metrics.winRate}%</p>
+                    </div>
+                    <div class="metric-card bg-white border-l-4 border-green-500">
+                        <p class="text-sm font-medium text-gray-500">Winning Trades</p>
+                        <p class="text-2xl font-bold text-green-700">${metrics.winningTrades}</p>
+                    </div>
+                    <div class="metric-card bg-white border-l-4 border-red-500">
+                        <p class="text-sm font-medium text-gray-500">Losing Trades</p>
+                        <p class="text-2xl font-bold text-red-700">${metrics.losingTrades}</p>
+                    </div>
+                </div>
+            `;
+            document.getElementById('total-net-pnl').innerHTML = `Current Month's Net PNL: <span class="${pnlColor} font-extrabold">$${metrics.totalNetPnl}</span>`;
+        }
+
+        function renderTradeHistory(allTrades) {
+            const tableContainer = document.getElementById('trade-history-table-container');
+            const tradeHistoryBody = document.getElementById('trade-history-body');
+
+            // Clear selections whenever the table is re-rendered, and update button state
+            selectedTradeIds.clear();
+            window.updateBatchDeleteButton(); 
+
+            const now = new Date();
+            const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            
+            const trades = allTrades.filter(trade => {
+                const date = trade.entryDateTime ? new Date(trade.entryDateTime) : (trade.timestamp ? new Date(trade.timestamp.seconds * 1000) : null);
+                if (!date) return false;
+                const tradeMonthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                return tradeMonthKey === currentMonthKey;
+            });
+            
+            if (trades.length === 0) {
+                // Colspan adjusted to 12 (12 total columns - 3 for batch/ID/Actions = 9 visible columns)
+                tradeHistoryBody.innerHTML = `<tr><td colspan="12" class="text-center py-4 text-gray-500">No trades logged for the current month yet.</td></tr>`;
+                return;
+            }
+
+            const enableBatchDelete = trades.length > 2;
+
+            let tableRows = '';
+
+            trades.forEach(trade => {
+                const netPnlColor = trade.netPnl > 0 ? 'text-green-600 font-bold' : (trade.netPnl < 0 ? 'text-red-600 font-bold' : 'text-gray-500');
+                const entryDateDisplay = trade.entryDateTime ? formatDateDDMMYYYY(trade.entryDateTime) : 'N/A';
+                
+                const tradeDataString = JSON.stringify(trade).replace(/"/g, '&quot;');
+                const isChecked = selectedTradeIds.has(trade.id); 
+                
+                // --- REMOVED TRUNCATION LOGIC ---
+                const fullId = trade.id;
+
+                tableRows += `
+                    <tr class="bg-white border-b hover:bg-gray-50">
+                        ${enableBatchDelete ? 
+                            `<td class="px-4 py-2 text-center">
+                                <input type="checkbox" data-trade-id="${trade.id}" onclick="window.toggleTradeSelection(this)" class="trade-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" ${isChecked ? 'checked' : ''}>
+                            </td>` 
+                            : ''}
+                        <td class="px-4 py-2 text-sm whitespace-nowrap table-left">${entryDateDisplay}</td>
+                        <!-- TRADE ID COLUMN (REMOVED TRUNCATE CLASSES) -->
+                        <td class="px-4 py-2 text-xs font-mono text-gray-500 table-left" title="${trade.id}">${fullId}</td>
+                        <td class="px-4 py-2 text-sm font-medium text-gray-900 table-left">${trade.symbol}</td>
+                        <td class="px-4 py-2 text-sm text-gray-500 table-left">${trade.timeframe}</td>
+                        <td class="px-4 py-2 text-sm table-center">${trade.position.charAt(0)}</td>
+                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.volume).toFixed(2)}</td>
+                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.entryPrice).toFixed(5)}</td>
+                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.exitPrice).toFixed(5)}</td>
+                        <td class="px-4 py-2 text-sm table-right">${trade.pips || 'N/A'}</td>
+                        <td class="px-4 py-2 text-sm ${netPnlColor} table-right">$${trade.netPnl}</td>
+                        <td class="px-4 py-2 text-center flex space-x-1 justify-center items-center">
+                            <button onclick="window.exportReport('${trade.id}', ${tradeDataString})" 
+                                class="text-xs bg-indigo-500 hover:bg-indigo-700 text-white font-semibold py-1 px-2 rounded-lg transition shadow-md">
+                                Report
+                            </button>
+                            <button onclick="window.showEditMode(${tradeDataString})" 
+                                class="text-xs bg-blue-500 hover:bg-blue-700 text-white font-semibold py-1 px-2 rounded-lg transition shadow-md">
+                                Edit
+                            </button>
+                            <button onclick="window.showDeleteConfirm('${trade.id}', '${trade.symbol}')"
+                                class="text-xs bg-red-500 hover:bg-red-700 text-white font-semibold py-1 px-2 rounded-lg transition shadow-md">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tradeHistoryBody.innerHTML = tableRows;
+
+            // Rebuild the table header dynamically
+            const tableHeaderRow = document.querySelector('#trade-history-table-container thead tr');
+            if (tableHeaderRow) {
+                // Clear existing headers except for the permanent ones (Date to Net P/L, and Action)
+                tableHeaderRow.innerHTML = ''; 
+
+                if (enableBatchDelete) {
+                    tableHeaderRow.innerHTML += `
+                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            <input type="checkbox" id="selectAllTrades" onclick="window.toggleSelectAll(this.checked)" class="rounded text-indigo-600 focus:ring-indigo-500">
+                        </th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Trade ID</th> 
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Pair</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">TF</th>
+                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">P/S</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Vol</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Entry</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Exit</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Pips/Pts</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Net P/L</th>
+                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                    `;
+                } else {
+                    tableHeaderRow.innerHTML += `
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Trade ID</th> <!-- Added Trade ID header -->
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Pair</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">TF</th>
+                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">P/S</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Vol</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Entry</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Exit</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Pips/Pts</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Net P/L</th>
+                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                    `;
+                }
+            }
+        }
+        
+        function renderMonthlyDetail(monthData) {
+            const detailContainer = document.getElementById('monthly-detail-container');
+            
+            let tableRows = monthData.trades.map(trade => {
+                const netPnlColor = trade.netPnl > 0 ? 'text-green-600 font-bold' : (trade.netPnl < 0 ? 'text-red-600 font-bold' : 'text-gray-500');
+                const entryDate = trade.entryDateTime ? new Date(trade.entryDateTime).toLocaleString('en-US', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
+                
+                const tradeDataString = JSON.stringify(trade).replace(/"/g, '&quot;');
+                
+                // --- REMOVED TRUNCATION LOGIC ---
+                const fullId = trade.id;
+
+
+                return `
+                    <tr class="bg-white border-b hover:bg-gray-50">
+                        <td class="px-4 py-2 text-sm whitespace-nowrap table-left">${entryDate.split(',')[0]}</td>
+                        <!-- TRADE ID COLUMN (REMOVED TRUNCATE CLASSES) -->
+                        <td class="px-4 py-2 text-xs font-mono text-gray-500 table-left" title="${trade.id}">${fullId}</td>
+                        <td class="px-4 py-2 text-sm font-medium text-gray-900 table-left">${trade.symbol}</td>
+                        <td class="px-4 py-2 text-sm table-center">${trade.position.charAt(0)}</td>
+                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.volume).toFixed(2)}</td>
+                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.entryPrice).toFixed(5)}</td>
+                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.exitPrice).toFixed(5)}</td>
+                        <td class="px-4 py-2 text-sm ${netPnlColor} table-right">$${trade.netPnl}</td>
+                        <td class="px-4 py-2 text-center flex space-x-1 justify-center items-center">
+                            <button onclick="window.exportReport('${trade.id}', ${tradeDataString})" 
+                                class="text-xs bg-indigo-500 hover:bg-indigo-700 text-white font-semibold py-1 px-2 rounded-lg transition shadow-md">
+                                Report
+                            </button>
+                           <button onclick="window.showEditMode(${tradeDataString})" 
+                                class="text-xs bg-blue-500 hover:bg-blue-700 text-white font-semibold py-1 px-2 rounded-lg transition shadow-md">
+                                Edit
+                            </button>
+                            <button onclick="window.showDeleteConfirm('${trade.id}', '${trade.symbol}')"
+                                class="text-xs bg-red-500 hover:bg-red-700 text-white font-semibold py-1 px-2 rounded-lg transition shadow-md">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+            
+            const pnlColor = parseFloat(monthData.totalNetPnl) >= 0 ? 'text-green-700' : 'text-red-700';
+            const winRateColor = monthData.winRate >= 50 ? 'text-green-700' : 'text-red-700';
+
+
+            detailContainer.innerHTML = `
+                <h3 class="text-xl font-bold text-gray-800 mb-4">${monthData.monthName} Trades (${monthData.totalTrades})</h3>
+                
+                <div class="grid grid-cols-4 gap-4 mb-4">
+                    <div class="p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+                        <p class="text-xs font-medium text-gray-500">Win Rate</p>
+                        <p class="text-xl font-bold ${winRateColor}">${monthData.winRate}%</p>
+                    </div>
+                    <div class="p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+                        <p class="text-xs font-medium text-gray-500">Winning Trades</p>
+                        <p class="text-xl font-bold text-green-700">${monthData.winningTrades}</p>
+                    </div>
+                    <div class="p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+                        <p class="text-xs font-medium text-gray-500">Losing Trades</p>
+                        <p class="text-xl font-bold text-red-700">${monthData.losingTrades}</p>
+                    </div>
+                    <div class="p-3 bg-white border border-gray-200 rounded-lg shadow-sm border-l-4 border-indigo-500">
+                        <p class="text-xs font-medium text-gray-500">Net PNL</p>
+                        <p class="text-xl font-bold ${pnlColor}">$${monthData.totalNetPnl}</p>
+                    </div>
+                </div>
+
+                <div class="mb-4 flex space-x-4">
+                    <button onclick="window.exportMonthlyTrades(${JSON.stringify(monthData).replace(/"/g, '&quot;')})"
+                        class="px-4 py-2 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-lg shadow-md transition duration-150">
+                        Download Monthly Summary PDF
+                    </button>
+                </div>
+                
+                <div class="overflow-x-auto border rounded-lg">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider table-left">Date</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider table-left">Trade ID</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider table-left">Pair</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider table-center">P/S</th>
+                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider table-right">Vol</th>
+                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider table-right">Entry</th>
+                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider table-right">Exit</th>
+                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider table-right">Net P/L</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${tableRows}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        function renderMonthlySummaries() {
+            const container = document.getElementById('monthly-summary-list');
+            const detailContainer = document.getElementById('monthly-detail-container');
+            container.innerHTML = '';
+            detailContainer.innerHTML = '<p class="text-gray-500 text-center p-4">Select a month to see trade details.</p>';
+
+            if (monthlySummaries.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 text-center p-4">No trading history to summarize.</p>';
+                return;
+            }
+            
+            monthlySummaries.forEach(month => {
+                const winRateColor = month.winRate >= 50 ? 'text-green-600' : 'text-red-600';
+                const pnlColor = parseFloat(month.totalNetPnl) >= 0 ? 'text-green-700' : 'text-red-700';
+
+                const card = document.createElement('div');
+                card.className = `metric-card bg-white border-l-4 border-indigo-500 cursor-pointer hover:bg-indigo-50 transition shadow-md`;
+                card.onclick = () => window.renderMonthlyDetail(month);
+                
+                card.innerHTML = `
+                    <p class="text-xl font-bold text-gray-800">${month.monthName}</p>
+                    <div class="grid grid-cols-3 mt-3 text-sm">
+                        <div>
+                            <span class="font-medium text-gray-500">Trades:</span>
+                            <span class="font-bold text-indigo-600">${month.totalTrades}</span>
+                        </div>
+                        <div>
+                            <span class="font-medium text-gray-500">Win Rate:</span>
+                            <span class="font-bold ${winRateColor}">${month.winRate}%</span>
+                        </div>
+                        <div>
+                            <span class="font-medium text-gray-500">Net PNL:</span>
+                            <span class="font-extrabold ${pnlColor}">$${month.totalNetPnl}</span>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+        
+        // --- DATA PROCESSING AND CALLING CODE ---
+
+        // 7. CALCULATE AND RENDER SUMMARY METRICS
+        function calculateAndRenderSummary(allTrades) {
+            const now = new Date();
+            const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            
+            const currentMonthTrades = allTrades.filter(trade => {
+                const date = trade.entryDateTime ? new Date(trade.entryDateTime) : (trade.timestamp ? new Date(trade.timestamp.seconds * 1000) : null);
+                if (!date) return false;
+                const tradeMonthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                return tradeMonthKey === currentMonthKey;
+            });
+
+            const totalTrades = currentMonthTrades.length;
+            const winningTrades = currentMonthTrades.filter(t => parseFloat(t.netPnl) > 0).length;
+            const losingTrades = currentMonthTrades.filter(t => parseFloat(t.netPnl) < 0).length;
+            const breakEvenTrades = currentMonthTrades.filter(t => parseFloat(t.netPnl) == 0).length;
+            const winRate = totalTrades > 0 ? ((winningTrades / totalTrades) * 100).toFixed(2) : '0.00';
+            const totalNetPnl = currentMonthTrades.reduce((sum, trade) => sum + parseFloat(trade.netPnl), 0);
+
+            performanceMetrics = {
+                totalTrades, winningTrades, losingTrades, breakEvenTrades,
+                winRate: parseFloat(winRate),
+                totalNetPnl: totalNetPnl.toFixed(2)
+            };
+            
+            window.renderHistorySummary(performanceMetrics);
+            window.renderTradeHistory(allTrades); 
+        }
+
+        // 10. MONTHLY SUMMARY LOGIC
+        function calculateMonthlySummaries(trades) {
+            const monthlyData = trades.reduce((acc, trade) => {
+                const date = trade.entryDateTime ? new Date(trade.entryDateTime) : (trade.timestamp ? new Date(trade.timestamp.seconds * 1000) : null);
+                if (!date) return acc;
+
+                const yearMonthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                
+                if (!acc[yearMonthKey]) {
+                    acc[yearMonthKey] = {
+                        key: yearMonthKey,
+                        monthName: date.toLocaleString('en-US', { year: 'numeric', month: 'long' }),
+                        totalTrades: 0, winningTrades: 0, losingTrades: 0,
+                        totalNetPnl: 0, totalGrossPnl: 0, totalCommission: 0, 
+                        trades: []
+                    };
+                }
+
+                const monthlyStat = acc[yearMonthKey];
+                const netPnl = parseFloat(trade.netPnl);
+                const grossPnl = parseFloat(trade.grossPnl); 
+                const commission = parseFloat(trade.commission); 
+                
+                monthlyStat.totalTrades++;
+                monthlyStat.totalNetPnl += netPnl;
+                monthlyStat.totalGrossPnl += grossPnl; 
+                monthlyStat.totalCommission += commission; 
+                monthlyStat.trades.push(trade);
+
+                if (netPnl > 0) {
+                    monthlyStat.winningTrades++;
+                } else if (netPnl < 0) {
+                    monthlyStat.losingTrades++;
+                }
+                
+                return acc;
+            }, {});
+
+            monthlySummaries = Object.values(monthlyData)
+                .map(summary => {
+                    const winRate = summary.totalTrades > 0 ? (summary.winningTrades / summary.totalTrades * 100).toFixed(2) : '0.00';
+                    summary.winRate = parseFloat(winRate);
+                    summary.totalNetPnl = summary.totalNetPnl.toFixed(2);
+                    summary.totalGrossPnl = summary.totalGrossPnl.toFixed(2);
+                    summary.totalCommission = summary.totalCommission.toFixed(2);
+                    return summary;
+                })
+                .sort((a, b) => b.key.localeCompare(a.key));
+
+            window.renderMonthlySummaries(); // Ensure this is called with window if necessary, but fixed scope should handle it
+        }
+
+        // --- MAIN INITIALIZATION BLOCK ---
+
+        try {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            setLogLevel('Debug'); // Enable logging for debugging firestore operations
+
+            // Set global references on window object (Crucial for onclick handlers)
+            window.db = db;
+            window.appId = appId;
+            window.logout = async () => { await signOut(auth); };
+            
+            // Expose the helper functions globally if they are needed in onclick attributes in HTML
+            window.generateNewTradeId = generateNewTradeId;
+            window.calculateTradeMetrics = calculateTradeMetrics;
+            window.formatDuration = formatDuration;
+            window.renderHistorySummary = renderHistorySummary;
+            window.renderTradeHistory = renderTradeHistory;
+            window.renderMonthlySummaries = renderMonthlySummaries;
+            window.renderMonthlyDetail = renderMonthlyDetail;
+
+            setPersistence(auth, browserSessionPersistence)
+                .catch((error) => console.error("Error setting persistence:", error));
+
+            // --- INITIAL AUTHENTICATION (Canvas Environment Flow) ---
+            const authenticate = async () => {
+                if (initialAuthToken) {
+                    try {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                        console.log("Signed in with custom token.");
+                    } catch (err) {
+                        console.warn("Custom token sign-in failed, falling back to anonymous:", err);
+                        await signInAnonymously(auth);
+                        console.log("Signed in anonymously after token failure.");
+                    }
+                } else {
+                    await signInAnonymously(auth);
+                    console.log("Signed in anonymously (no token provided).");
+                }
+            };
+            
+            // Execute initial authentication immediately on load
+            authenticate();
+
+            // --- AUTH STATE LISTENER ---
+            onAuthStateChanged(auth, async (user) => {
+                const loginOverlay = document.getElementById('login-overlay');
+                
+                // Define default table/summary content messages
+                const defaultTableContent = '<tr><td colspan="12" class="text-center py-4 text-red-500 font-bold">Please log in to view trades.</td></tr>';
+                const defaultSummaryContent = '<p class="text-gray-500 text-center p-4">Please log in to view summaries.</p>';
+
+                if (user && !user.isAnonymous) {
+                    // User is explicitly logged in
+                    userId = user.uid;
+                    loginOverlay.classList.add('hidden'); 
+                    document.getElementById('logout-button').classList.remove('hidden');
+                    isAuthReady = true;
+
+                } else if (user && user.isAnonymous) {
+                     // User is logged in anonymously (usually pending explicit login)
+                     userId = user.uid;
+                     loginOverlay.classList.remove('hidden');
+                     document.getElementById('logout-button').classList.add('hidden');
+                     isAuthReady = true;
+
+                } else {
+                    // No user logged in
+                    userId = null;
+                    loginOverlay.classList.remove('hidden'); 
+                    document.getElementById('logout-button').classList.add('hidden');
+                    isAuthReady = true; 
+                    
+                    // Clear data/tables when logged out
+                    document.getElementById('trade-history-body').innerHTML = defaultTableContent;
+                    document.getElementById('monthly-summary-list').innerHTML = defaultSummaryContent;
+                    document.getElementById('monthly-detail-container').innerHTML = defaultSummaryContent;
+                    document.getElementById('total-net-pnl').innerHTML = `Current Month's Net PNL: <span class="text-gray-500 font-extrabold">$0.00</span>`;
+                }
+                    
+                window.userId = userId;
+                document.getElementById('user-id-display').textContent = `User ID: ${userId || 'Not Authenticated'}`;
+                
+                // CRITICAL: Call loadTrades only when authentication state has stabilized AND a user ID (even anonymous) is present
+                if (userId && isAuthReady) {
+                    loadTrades();
+                }
+            });
+
+        } catch (e) {
+            console.error("Failed to initialize Firebase:", e);
+            document.getElementById('login-overlay').classList.remove('hidden');
+            document.getElementById('user-id-display').textContent = `User ID: Not Available (Check Console)`;
+        }
+
+        // 6. DATA LOADING (Real-time Snapshot)
+        function loadTrades() {
+            const currentDb = window.db;
+            const currentUserId = window.userId;
+
+            if (!currentDb || !currentUserId) {
+                console.warn("DB or userId not ready for loading trades.");
+                // Ensure the empty state is displayed if the function runs prematurely or without a valid user.
+                const defaultTableContent = '<tr><td colspan="12" class="text-center py-4 text-red-500 font-bold">Please log in to view trades.</td></tr>';
+                document.getElementById('trade-history-body').innerHTML = defaultTableContent;
+                return;
+            }
+            
+            const tradesCollectionRef = collection(currentDb, `artifacts/${appId}/users/${currentUserId}/trades`);
+            const q = query(tradesCollectionRef); 
+            
+            onSnapshot(q, (snapshot) => {
+                const trades = [];
+                snapshot.forEach((doc) => {
+                    trades.push({ id: doc.id, ...doc.data() });
+                });
+                trades.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+                
+                currentTrades = trades; 
+                calculateAndRenderSummary(trades); 
+                calculateMonthlySummaries(trades);
+            }, (error) => {
+                console.error("Error fetching trades:", error);
+                showMessage("Could not load trade history. Check Firebase rules.", 'error');
+                // Ensure correct error message in table body
+                document.getElementById('trade-history-body').innerHTML = '<tr><td colspan="12" class="text-center py-4 text-red-500 font-bold">Error loading trades. Check console.</td></tr>';
+            });
+        }
+        
+        
+        // 4A. LOGIN FORM HANDLER 
+        document.getElementById('login-form')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const loginOverlay = document.getElementById('login-overlay');
+
+            if (!auth) {
+                showMessage("Firebase Auth not initialized.", 'error');
+                return;
+            }
+
+            try {
+                // Attempt to sign in with email and password
+                await signInWithEmailAndPassword(auth, email, password);
+                showMessage("Login successful!", 'success');
+                // The onAuthStateChanged listener handles hiding the overlay
+            } catch (error) {
+                console.error("Login failed:", error.code, error.message);
+                showMessage("Login Failed: Incorrect email/password, or access restricted.", 'error');
+            }
+        });
+
+        // NEW: Function to reset form state for new trades
+        window.resetFormToNewTrade = () => {
+            const tradeForm = document.getElementById('trade-form');
+            const tradeIdInput = document.getElementById('tradeId');
+            const formTitle = document.getElementById('log-trade-title');
+            const submitButton = document.getElementById('trade-submit-button');
+
+            tradeForm.reset();
+            tradeIdInput.value = '';
+            formTitle.textContent = 'Log New Trade';
+            submitButton.textContent = 'Log Trade';
+            document.getElementById('symbol')?.dispatchEvent(new Event('change')); // To hide/show manual PNL
+        };
+
+
+        // 4B. TRADE SUBMISSION HANDLER (Updated for Edit/Update logic)
+        document.getElementById('trade-form')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+
+            if (!userId) {
+                showMessage("You must be logged in to log/update a trade.", 'error');
+                return;
+            }
+
+            const tradeId = form.tradeId.value; // Existing ID for EDITING
+            
+            const selectedSymbol = form.symbol.value;
+            const finalSymbol = selectedSymbol === 'Other' ? form.customSymbol.value.trim() : selectedSymbol;
+
+            const formData = {
+                symbol: finalSymbol,
+                position: form.position.value,
+                timeframe: form.timeframe.value,
+                volume: form.volume.value,
+                entryPrice: form.entryPrice.value,
+                exitPrice: form.exitPrice.value,
+                takeProfit: form.takeProfit.value,
+                stopLoss: form.stopLoss.value,
+                entryDateTime: form.entryDateTime.value,
+                exitDateTime: form.exitDateTime.value,
+                swap: form.swap.value || '0',
+                manualGrossPnl: form.manualGrossPnl.value || '', 
+                reason: form.reason.value.trim(),
+            };
+            
+            const metrics = calculateTradeMetrics(formData);
+            if (!metrics) return; 
+
+            // Use the original serverTimestamp from Firestore import
+            const timestampFn = window.db && originalServerTimestamp ? originalServerTimestamp : serverTimestamp;
+            
+            const tradeData = {
+                ...formData,
+                ...metrics,
+                timestamp: timestampFn()
+            };
+
+            try {
+                const tradesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/trades`);
+
+                if (tradeId) {
+                    // Case 1: EDIT MODE. Use existing Firebase ID (random or custom format).
+                    const tradeDocRef = doc(tradesCollectionRef, tradeId);
+                    await setDoc(tradeDocRef, tradeData);
+                    showMessage("Trade updated successfully!", 'success');
+
+                } else {
+                    // Case 2: New trade. Generate complex ID and use setDoc.
+                    
+                    // --- ID GENERATION STEP ---
+                    const newTradeId = generateNewTradeId(currentTrades, tradeData.symbol, tradeData.entryDateTime);
+
+                    const tradeDocRef = doc(tradesCollectionRef, newTradeId);
+                    await setDoc(tradeDocRef, tradeData);
+                    showMessage(`Trade ${newTradeId} logged successfully!`, 'success');
+                }
+                
+                window.resetFormToNewTrade(); // Reset form state after successful operation
+            } catch (error) {
+                console.error(`Error ${tradeId ? 'updating' : 'logging'} trade:`, error);
+                // The error most likely means the generated ID already exists, or Firebase access failed.
+                showMessage(`Failed to ${tradeId ? 'update' : 'log'} trade. (Generated ID conflict or access error). Check console for details.`, 'error');
+            }
+        });
+        
+        // NEW: Function to switch form to Edit Mode
+        window.showEditMode = (tradeData) => {
+            const tradeForm = document.getElementById('trade-form');
+            const tradeIdInput = document.getElementById('tradeId');
+            const formTitle = document.getElementById('log-trade-title');
+            const submitButton = document.getElementById('trade-submit-button');
+
+            window.showView('trade-log-view'); // Switch to log view
+            
+            // 1. Set Trade ID and Mode
+            tradeIdInput.value = tradeData.id;
+            formTitle.textContent = `Edit Trade: ${tradeData.symbol} (ID: ${tradeData.id})`; // Display full ID
+            submitButton.textContent = 'Update Trade';
+            
+            // 2. Helper to convert date string to YYYY-MM-DDTHH:MM:SS format
+            const toLocalDatetime = (dtString) => {
+                if (!dtString) return '';
+                const dt = new Date(dtString);
+                // Note: datetime-local input expects YYYY-MM-DDTHH:MM:SS format without Z (local time zone)
+                // This manually handles the formatting for compatibility
+                const year = dt.getFullYear();
+                const month = String(dt.getMonth() + 1).padStart(2, '0');
+                const day = String(dt.getDate()).padStart(2, '0');
+                const hour = String(dt.getHours()).padStart(2, '0');
+                const minute = String(dt.getMinutes()).padStart(2, '0');
+                const second = String(dt.getSeconds()).padStart(2, '0');
+                return `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+            };
+
+
+            // 3. Populate Fields
+            // Handle 'Other' symbol selection
+            if (!tradeForm.querySelector(`option[value="${tradeData.symbol}"]`)) {
+                tradeForm.symbol.value = 'Other';
+                tradeForm.customSymbol.value = tradeData.symbol;
+            } else {
+                tradeForm.symbol.value = tradeData.symbol;
+            }
+
+            tradeForm.position.value = tradeData.position;
+            tradeForm.timeframe.value = tradeData.timeframe;
+            // Ensure numbers are parsed and formatted for input consistency
+            tradeForm.volume.value = parseFloat(tradeData.volume).toFixed(2);
+            
+            tradeForm.entryPrice.value = parseFloat(tradeData.entryPrice).toFixed(5);
+            tradeForm.exitPrice.value = parseFloat(tradeData.exitPrice).toFixed(5);
+            
+            // Optional fields
+            tradeForm.takeProfit.value = tradeData.takeProfit ? parseFloat(tradeData.takeProfit).toFixed(5) : '';
+            tradeForm.stopLoss.value = tradeData.stopLoss ? parseFloat(tradeData.stopLoss).toFixed(5) : '';
+            tradeForm.swap.value = parseFloat(tradeData.swap).toFixed(2);
+            tradeForm.manualGrossPnl.value = tradeData.manualGrossPnl || '';
+            
+            tradeForm.entryDateTime.value = toLocalDatetime(tradeData.entryDateTime);
+            tradeForm.exitDateTime.value = toLocalDatetime(tradeData.exitDateTime);
+
+            tradeForm.reason.value = tradeData.reason;
+
+            // 4. Trigger symbol change to show/hide manual PNL/custom symbol fields
+            document.getElementById('symbol')?.dispatchEvent(new Event('change'));
+            
+            // Scroll to form
+            document.getElementById('trade-log-view').scrollIntoView({ behavior: 'smooth' });
+        };
+
+
+        // 5. Conditional Input Toggle Listener
+        document.addEventListener('DOMContentLoaded', () => {
+            const symbolSelect = document.getElementById('symbol');
+            const customSymbolContainer = document.getElementById('custom-symbol-container');
+            const customSymbolInput = document.getElementById('customSymbol');
+            const manualPnlInput = document.getElementById('manualGrossPnl');
+            const manualPnlContainer = document.getElementById('manual-pnl-container'); 
+
+            // LIST OF SYMBOLS FOR WHICH MANUAL PNL OVERWRITE IS *NOT* REQUIRED (EXCLUSIONS)
+            const autoCalculatedSymbols = [
+                'XAU/USD', 
+                'AUD/USD', 
+                'GBP/USD', 
+                'EUR/USD',
+            ]; 
+
+            const toggleConditionalInputs = (selectedSymbol) => {
+                // Determine the symbol to check against the exclusion list
+                let symbolToCheck = selectedSymbol;
+                if (selectedSymbol === 'Other' && customSymbolInput.value.trim() !== '') {
+                    symbolToCheck = customSymbolInput.value.trim();
+                }
+
+                if (selectedSymbol === 'Other') {
+                    customSymbolContainer.classList.remove('hidden');
+                    customSymbolInput.setAttribute('required', 'true');
+                    customSymbolInput.focus();
+                } else {
+                    customSymbolContainer.classList.add('hidden');
+                    customSymbolInput.removeAttribute('required');
+                    customSymbolInput.value = ''; 
+                }
+
+                // Check if the current selection is one of the EXCLUDED, auto-calculated symbols OR if no symbol is selected
+                const isAutoCalculatedOrUnselected = autoCalculatedSymbols.includes(symbolToCheck) || selectedSymbol === "";
+
+                if (isAutoCalculatedOrUnselected) {
+                    // Hide field and remove requirement
+                    manualPnlContainer.classList.add('hidden');
+                    manualPnlInput.removeAttribute('required');
+                    manualPnlInput.placeholder = 'Leave blank to auto-calculate';
+                } else {
+                    // Show field and add requirement (for all other symbols/pairs, including Other, USOIL, EUR/JPY, etc.)
+                    manualPnlContainer.classList.remove('hidden');
+                    manualPnlInput.setAttribute('required', 'true');
+                    manualPnlInput.placeholder = 'Required for complex instruments';
+                    
+                    // Update label for better context
+                    document.querySelector('label[for="manualGrossPnl"]').innerHTML = 
+                        `Gross PNL Overwrite ($) <span class="text-xs text-red-500">(Required for all non-major pairs)</span>`;
+                }
+            };
+
+            if (symbolSelect) {
+                // IMPORTANT: Initialize the state correctly on load.
+                // The select element starts with selectedSymbol = "", so it should be hidden.
+                toggleConditionalInputs(symbolSelect.value); 
+                
+                symbolSelect.addEventListener('change', (e) => {
+                    toggleConditionalInputs(e.target.value);
+                });
+                customSymbolInput.addEventListener('input', (e) => {
+                    // Trigger toggle on input change for 'Other' to ensure requirement logic is correctly applied
+                    if (symbolSelect.value === 'Other') {
+                        toggleConditionalInputs(symbolSelect.value);
+                    }
+                });
+            }
+
+            // Initialize tab navigation
+            window.showView = (viewId) => {
+                document.querySelectorAll('.view-panel').forEach(panel => {
+                    panel.classList.add('hidden');
+                });
+                document.getElementById(viewId)?.classList.remove('hidden');
+
+                document.querySelectorAll('.tab-button').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                document.querySelector(`.tab-button[data-view="${viewId}"]`)?.classList.add('active');
+                
+                // If switching away from trade log, reset the form
+                if (viewId !== 'trade-log-view') {
+                    window.resetFormToNewTrade();
+                }
+            };
+            
+            window.showView('trade-log-view');
+        });
+
+        // NEW: Batch Selection and Deletion Functions
+        window.toggleSelectAll = (checked) => {
+            selectedTradeIds.clear();
+            // Select checkboxes from the dedicated container
+            const checkboxes = document.querySelectorAll('#trade-history-table-container .trade-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = checked;
+                if (checked) {
+                    selectedTradeIds.add(checkbox.dataset.tradeId);
+                }
+            });
+            window.updateBatchDeleteButton();
+        };
+
+        window.toggleTradeSelection = (checkbox) => {
+             const tradeId = checkbox.dataset.tradeId;
+             if (checkbox.checked) {
+                 selectedTradeIds.add(tradeId);
+             } else {
+                 selectedTradeIds.delete(tradeId);
+                 // Uncheck "Select All" if any trade is deselected
+                 const selectAll = document.getElementById('selectAllTrades');
+                 if (selectAll) selectAll.checked = false;
+             }
+             window.updateBatchDeleteButton();
+        };
+
+        window.updateBatchDeleteButton = () => {
+            const count = selectedTradeIds.size;
+            const button = document.getElementById('batch-delete-button');
+            if (count > 0) {
+                button.classList.remove('hidden');
+                button.textContent = `Delete ${count} Selected Trade${count > 1 ? 's' : ''}`;
+            } else {
+                button.classList.add('hidden');
+            }
+        };
+
+        window.deleteSelectedTrades = async () => {
+            if (selectedTradeIds.size === 0) {
+                showMessage("No trades selected for deletion.", 'info');
+                return;
+            }
+
+            const tradeIdsToDelete = Array.from(selectedTradeIds);
+            const count = tradeIdsToDelete.length;
+            const tradesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/trades`);
+            
+            // Use modal for confirmation
+            const modal = document.getElementById('delete-confirm-modal');
+            document.getElementById('delete-trade-info').innerHTML = 
+                `Are you sure you want to permanently delete <strong>${count} selected trade${count > 1 ? 's' : ''}</strong>? This action cannot be undone.`;
+            
+            const confirmBtn = document.getElementById('confirm-delete-button');
+            
+            confirmBtn.onclick = async () => {
+                modal.classList.add('hidden');
+                let successCount = 0;
+                
+                for (const tradeId of tradeIdsToDelete) {
+                    try {
+                        const tradeDocRef = doc(tradesCollectionRef, tradeId);
+                        await deleteDoc(tradeDocRef);
+                        successCount++;
+                    } catch (error) {
+                        console.error(`Failed to delete trade ${tradeId}:`, error);
+                        showMessage(`Failed to delete trade ${tradeId}.`, 'error');
+                    }
+                }
+                
+                selectedTradeIds.clear();
+                const selectAll = document.getElementById('selectAllTrades');
+                if (selectAll) selectAll.checked = false;
+                window.updateBatchDeleteButton();
+
+                if (successCount > 0) {
+                     showMessage(`${successCount} trade${successCount > 1 ? 's' : ''} deleted successfully.`, 'success');
+                } else {
+                     showMessage("No trades were successfully deleted.", 'info');
+                }
+            };
+            
+            modal.classList.remove('hidden');
+        };
+
+        // 9. DELETE TRADE FUNCTIONALITY
+        window.deleteTrade = async (tradeId) => {
+            if (!window.db || !window.userId) {
+                showMessage("Authentication error. Cannot delete trade.", 'error');
+                return;
+            }
+            try {
+                const tradeDocRef = doc(window.db, `artifacts/${appId}/users/${window.userId}/trades`, tradeId);
+                await deleteDoc(tradeDocRef);
+                showMessage(`Trade ${tradeId} successfully deleted.`, 'info');
+                // Hiding modal after successful delete
+                document.getElementById('delete-confirm-modal').classList.add('hidden');
+            } catch (error) {
+                console.error("Error deleting document:", error);
+                showMessage("Failed to delete trade. Check console for details.", 'error');
+            }
+        };
+
+        window.showDeleteConfirm = (tradeId, symbol) => {
+            const modal = document.getElementById('delete-confirm-modal');
+            document.getElementById('delete-trade-info').innerHTML = `Are you sure you want to permanently delete the trade for <strong>${symbol}</strong>? This action cannot be undone.`;
+            
+            const confirmBtn = document.getElementById('confirm-delete-button');
+            // If deleting a single trade, use the single delete function
+            confirmBtn.onclick = () => window.deleteTrade(tradeId);
+            
+            modal.classList.remove('hidden');
+        };
+
+        window.cancelDelete = () => {
+            document.getElementById('delete-confirm-modal').classList.add('hidden');
+        };
+        
+        // --- PDF GENERATION LOGIC ---
+        const scriptJsPDF = document.createElement('script');
+        scriptJsPDF.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+        document.head.appendChild(scriptJsPDF);
+
+        const scriptHtml2Canvas = document.createElement('script');
+        scriptHtml2Canvas.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+        document.head.appendChild(scriptHtml2Canvas);
+
+        async function generatePdfFromElement(element, fileName) {
+            const loadingIndicator = document.getElementById('loading-report');
+            const { jsPDF } = window.jspdf;
+            
+            loadingIndicator.classList.remove('hidden');
+
+            try {
+                const canvas = await html2canvas(element, {
+                    scale: 3, 
+                    useCORS: true,
+                    windowWidth: 800, 
+                    windowHeight: element.offsetHeight 
+                });
+
+                const imgData = canvas.toDataURL('image/png');
+                
+                const pdf = new jsPDF('p', 'pt', 'a4'); 
+                const imgWidth = 550; 
+                const pageHeight = pdf.internal.pageSize.getHeight();
+                const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                let heightLeft = imgHeight;
+                let position = 20; 
+
+                pdf.addImage(imgData, 'PNG', 20, position, imgWidth, imgHeight);
+                heightLeft -= pageHeight;
+                
+                while (heightLeft > 0) {
+                    position = heightLeft - imgWidth + 20; // This was wrong in the previous version, but html2canvas often makes a multi-page PDF unnecessary for these elements. Keeping it minimal.
+                    pdf.addPage();
+                    pdf.addImage(imgData, 'PNG', 20, position, imgWidth, imgHeight);
+                    heightLeft -= pageHeight;
+                }
+
+                pdf.save(fileName);
+                showMessage("PDF report generated successfully!");
+
+            } catch (error) {
+                console.error("PDF Generation Error:", error);
+                showMessage("Failed to generate PDF report. Make sure your browser allows pop-ups/downloads.", 'error');
+            } finally {
+                loadingIndicator.classList.add('hidden');
+                document.getElementById('report-template').innerHTML = ''; 
+            }
+        }
+
+        // 11. EXPORT MONTHLY TRADES REPORT
+        window.exportMonthlyTrades = async (monthData) => {
+            const reportTemplate = document.getElementById('report-template');
+            
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            let tableRows = monthData.trades.map(trade => {
+                const netPnlColor = parseFloat(trade.netPnl) > 0 ? 'color: #059669;' : (parseFloat(trade.netPnl) < 0 ? 'color: #dc2626;' : 'color: #6b7280;');
+                
+                const entryDate = trade.entryDateTime ? new Date(trade.entryDateTime) : (trade.timestamp ? new Date(trade.timestamp.seconds * 1000) : null);
+                const formattedDate = entryDate ? `${String(entryDate.getDate()).padStart(2, '0')}/${String(entryDate.getMonth() + 1).padStart(2, '0')}/${entryDate.getFullYear()}` : 'N/A';
+                
+                // --- REMOVED TRUNCATION LOGIC ---
+                const fullId = trade.id;
+
+
+                return `
+                    <tr>
+                        <td style="text-align:left; font-size: 10px;">${formattedDate}</td>
+                        <td style="text-align:left; font-size: 10px; font-weight: 700; color: #6b7280;">${fullId}</td>
+                        <td style="text-align:left; font-size: 10px; font-weight: bold;">${trade.symbol}</td>
+                        <td style="text-align:center; font-size: 10px;">${trade.position.charAt(0)}</td>
+                        <td style="text-align:right; font-size: 10px;">${parseFloat(trade.entryPrice).toFixed(5)}</td>
+                        <td style="text-align:right; font-size: 10px;">${parseFloat(trade.exitPrice).toFixed(5)}</td>
+                        <td style="text-align:right; font-size: 10px;">$${trade.grossPnl}</td>
+                        <td style="text-align:right; font-size: 10px;">$${trade.commission}</td>
+                        <td style="text-align:right; font-size: 10px;">$${trade.swap}</td>
+                        <td style="text-align:right; font-size: 10px; ${netPnlColor}; font-weight: 700;">$${trade.netPnl}</td>
+                    </tr>
+                `;
+            }).join('');
+            
+            const totalNetPnlColor = parseFloat(monthData.totalNetPnl) >= 0 ? 'color: #059669;' : 'color: #dc2626;';
+            const totalGrossPnlColor = parseFloat(monthData.totalGrossPnl) >= 0 ? 'color: #1f2937;' : 'color: #dc2626;'; 
+            const totalCommissionColor = parseFloat(monthData.totalCommission) >= 0 ? 'color: #dc2626;' : 'color: #dc2626;'; 
+
+            reportTemplate.innerHTML = `
+                <div id="monthly-detail-report-content" class="p-8 bg-white max-w-2xl mx-auto">
+                    
+                    <div class="text-center mb-8 border-b-2 border-gray-800 pb-4">
+                        <h1 class="text-3xl font-extrabold text-black uppercase" style="letter-spacing: 1px;">
+                            ${monthData.monthName} - Trade Log
+                        </h1>
+                    </div>
+
+                    <table class="history-report-table" style="width: 100%; font-size: 11px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left;">Date</th>
+                                <th style="text-align:left;">Trade ID</th>
+                                <th style="text-align:left;">Symbol</th>
+                                <th style="text-align:center;">P/S</th>
+                                <th style="text-align:right;">Entry Price</th>
+                                <th style="text-align:right;">Exit Price</th>
+                                <th style="text-align:right;">Gross PNL</th>
+                                <th style="text-align:right;">Commission</th>
+                                <th style="text-align:right;">Swap</th>
+                                <th style="text-align:right;">Net PNL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${tableRows}
+                        </tbody>
+                    </table>
+                    
+                    <div style="text-align: right; margin-top: 20px; padding-top: 10px; border-top: 2px solid #e5e7eb;">
+                        
+                        <p style="font-size: 12px; font-weight: bold; color: #1f2937; margin-bottom: 5px;">
+                            TOTAL TRADES: 
+                            <span style="font-size: 14px; color: #1f2937; margin-left: 8px;">
+                                ${monthData.totalTrades}
+                            </span>
+                        </p>
+                        <p style="font-size: 12px; font-weight: bold; color: #1f2937; margin-bottom: 5px;">
+                            WINNING TRADES: 
+                            <span style="font-size: 14px; color: #059669; margin-left: 8px;">
+                                ${monthData.winningTrades}
+                            </span>
+                        </p>
+                        <p style="font-size: 12px; font-weight: bold; color: #1f2937; margin-bottom: 5px;">
+                            LOSING TRADES: 
+                            <span style="font-size: 14px; color: #dc2626; margin-left: 8px;">
+                                ${monthData.losingTrades}
+                            </span>
+                        </p>
+                        <p style="font-size: 12px; font-weight: bold; color: #1f2937; margin-bottom: 5px;">
+                            TOTAL COMMISSION PAID: 
+                            <span style="font-size: 14px; ${totalCommissionColor}; margin-left: 8px;">
+                                $${monthData.totalCommission}
+                            </span>
+                        </p>
+                        <p style="font-size: 12px; font-weight: bold; color: #1f2937; margin-bottom: 5px;">
+                            TOTAL GROSS PNL: 
+                            <span style="font-size: 14px; ${totalGrossPnlColor}; margin-left: 8px;">
+                                $${monthData.totalGrossPnl}
+                            </span>
+                        </p>
+                        <h3 style="font-size: 14px; font-weight: bold; color: #1f2937;">
+                            MONTHLY NET PNL TOTAL: 
+                            <span style="font-size: 16px; ${totalNetPnlColor}; margin-left: 8px;">
+                                $${monthData.totalNetPnl}
+                            </span>
+                        </h3>
+                    </div>
+
+                    <div class="text-center mt-8 text-xs text-gray-400 border-t pt-4">
+                        Generated by Ananta Horizon Trading Journal Application
+                    </div>
+                </div>
+            `;
+            
+            await generatePdfFromElement(document.getElementById('monthly-detail-report-content'), `${monthData.key}_Trades_Log.pdf`);
+        };
+
+
+        window.exportReport = async (tradeId, tradeData) => {
+            const reportTemplate = document.getElementById('report-template');
+            
+            await new Promise(resolve => setTimeout(resolve, 100)); 
+
+            const entryDateDisplay = tradeData.entryDateTime ? formatDateDDMMYYYY(tradeData.entryDateTime) : 'N/A';
+            const exitDateDisplay = tradeData.exitDateTime ? formatDateDDMMYYYY(tradeData.exitDateTime) : 'N/A';
+            
+            const entryTimeFull = tradeData.entryDateTime ? new Date(tradeData.entryDateTime).toLocaleTimeString('en-US') : 'N/A';
+            const exitTimeFull = tradeData.exitDateTime ? new Date(tradeData.exitDateTime).toLocaleTimeString('en-US') : 'N/A';
+
+
+            reportTemplate.innerHTML = `
+                <div id="single-report-content" class="p-8 bg-white shadow-xl max-w-2xl mx-auto">
+                    <div class="text-center mb-6 border-b-2 border-indigo-500 pb-4">
+                        <h1 class="text-2xl font-extrabold text-gray-800 uppercase">Trade Execution Report</h1>
+                        <p class="text-sm text-gray-500">Trade ID: ${tradeId}</p>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-0 border-t border-l border-gray-200">
+                        
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">PAIR</span>
+                            <span class="text-lg font-extrabold text-indigo-700">${tradeData.symbol}</span>
+                        </div>
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">POSITION</span>
+                            <span class="text-lg font-extrabold ${tradeData.position === 'Long' ? 'text-green-600' : 'text-red-600'}">${tradeData.position.toUpperCase()}</span>
+                        </div>
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">TIMEFRAME</span>
+                            <span class="text-lg font-bold text-gray-800">${tradeData.timeframe}</span>
+                        </div>
+
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">ENTRY PRICE</span>
+                            <span class="text-md font-semibold text-gray-900">${parseFloat(tradeData.entryPrice).toFixed(5)}</span>
+                        </div>
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">EXIT PRICE</span>
+                            <span class="text-md font-semibold text-gray-900">${parseFloat(tradeData.exitPrice).toFixed(5)}</span>
+                        </div>
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">LOT SIZE</span>
+                            <span class="text-md font-semibold text-gray-900">${parseFloat(tradeData.volume).toFixed(2)}</span>
+                        </div>
+
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">TAKE PROFIT</span>
+                            <span class="text-md font-semibold text-blue-600">${parseFloat(tradeData.takeProfit).toFixed(5)}</span>
+                        </div>
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">STOP LOSS</span>
+                            <span class="text-md font-semibold text-red-600">${parseFloat(tradeData.stopLoss).toFixed(5)}</span>
+                        </div>
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">DURATION</span>
+                            <span class="text-md font-semibold text-gray-900">${tradeData.duration}</span>
+                        </div>
+                        
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">COMMISSION ($)</span>
+                            <span class="text-md font-semibold text-gray-800">$${tradeData.commission}</span>
+                        </div>
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">SWAP ($)</span>
+                            <span class="text-md font-semibold text-gray-800">$${tradeData.swap}</span>
+                        </div>
+                        <div class="report-grid-box">
+                            <span class="text-xs font-bold uppercase text-gray-600">GROSS PNL ($)</span>
+                            <span class="text-md font-semibold text-gray-800">$${tradeData.grossPnl}</span>
+                        </div>
+
+                        <div class="report-grid-box col-span-3 !min-h-16">
+                            <span class="text-xs font-bold uppercase text-gray-600">NET PNL ($)</span>
+                            <span class="text-2xl font-extrabold ${tradeData.netPnl > 0 ? 'text-green-700' : 'text-red-700'}">$${tradeData.netPnl}</span>
+                        </div>
+                    </div>
+
+                    <div class="mt-6 border border-gray-200">
+                        <div class="grid grid-cols-2">
+                            <div class="report-grid-box !min-h-16 border-r border-gray-200">
+                                <span class="text-xs font-bold uppercase text-gray-600 mb-1">ENTRY DATE/TIME (Local)</span>
+                                <span class="text-sm font-mono text-gray-800">${entryDateDisplay} ${entryTimeFull}</span>
+                            </div>
+                            <div class="report-grid-box !min-h-16">
+                                <span class="text-xs font-bold uppercase text-gray-600 mb-1">EXIT DATE/TIME (Local)</span>
+                                <span class="text-sm font-mono text-gray-800">${exitDateDisplay} ${exitTimeFull}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-6 border border-gray-200 p-4 rounded-lg">
+                        <h3 class="text-sm font-bold uppercase text-gray-600 mb-2">REASON FOR TRADE / TAKEAWAYS</h3>
+                        <p class="text-gray-700 whitespace-pre-wrap">${tradeData.reason || 'No reason provided.'}</p>
+                    </div>
+
+                    <div class="text-center mt-8 text-xs text-gray-400 border-t pt-4">
+                        Generated by Ananta Horizon Trading Journal Application
+                    </div>
+                </div>
+            `;
+            
+            // --- UPDATED FILENAME: Now only uses tradeId for download ---
+            await generatePdfFromElement(document.getElementById('single-report-content'), `${tradeId}.pdf`);
+        };
+
+
+    </script>
+</head>
+<body class="bg-gray-50 min-h-screen p-4 md:p-8">
+
+    <div id="message-container" class="fixed top-4 right-4 z-50"></div>
+
+    <!-- Login Overlay -->
+    <div id="login-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-95 z-40 flex items-center justify-center hidden">
+        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm">
+            <h2 class="text-2xl font-extrabold text-indigo-700 mb-6 text-center">Private Journal Login</h2>
+            <form id="login-form" class="space-y-4">
+                <div>
+                    <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                    <input type="email" id="email" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                    <input type="password" id="password" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+                <button type="submit"
+                        class="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition">
+                    Sign In
+                </button>
+                <p class="text-xs text-red-500 text-center mt-2">Access is restricted to the journal owner only.</p>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="delete-confirm-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-50 flex items-center justify-center hidden modal-backdrop">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-md transform transition-all">
+            <h3 class="text-xl font-bold text-red-600 mb-4 flex items-center">
+                <!-- SVG Warning Icon -->
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                Confirm Deletion
+            </h3>
+            <p id="delete-trade-info" class="text-gray-700 mb-6">
+                Are you sure you want to permanently delete this trade? This action cannot be undone.
+            </p>
+            <div class="flex justify-end space-x-3">
+                <button onclick="window.cancelDelete()"
+                        class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold rounded-lg transition">
+                    Cancel
+                </button>
+                <button id="confirm-delete-button"
+                        class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition">
+                    Yes, Delete Trade
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="max-w-7xl mx-auto">
+        
+        <header class="mb-8 p-4 bg-white shadow-lg rounded-xl flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-extrabold text-indigo-700">Ananta Horizon Trading Journal</h1>
+                <p id="user-id-display" class="text-sm text-gray-500 mt-1 truncate">User ID: Loading...</p>
+            </div>
+            <button id="logout-button" onclick="window.logout()" class="hidden py-2 px-4 bg-red-500 hover:bg-red-700 text-white font-bold rounded-lg transition">
+                Log Out
+            </button>
+        </header>
+        
+        <div class="bg-white rounded-t-xl shadow-lg border-b border-gray-200">
+            <nav class="flex space-x-4 p-4">
+                <button class="tab-button px-3 py-2 text-gray-500 hover:text-indigo-700 transition duration-150" 
+                        data-view="trade-log-view" onclick="showView('trade-log-view')">
+                    Trade Log
+                </button>
+                <button class="tab-button px-3 py-2 text-gray-500 hover:text-indigo-700 transition duration-150"
+                        data-view="monthly-summary-view" onclick="showView('monthly-summary-view')">
+                    Monthly Summary
+                </button>
+            </nav>
+        </div>
+
+        <div class="bg-white rounded-b-xl shadow-lg p-6">
+            
+            <div id="trade-log-view" class="view-panel grid grid-cols-1 lg:grid-cols-3 gap-8">
+                
+                <div class="lg:col-span-1 p-0 h-fit">
+                    <h2 id="log-trade-title" class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Log New Trade</h2>
+                    <form id="trade-form" class="space-y-4">
+                        <!-- Hidden field to store trade ID for editing -->
+                        <input type="hidden" id="tradeId" name="tradeId">
+
+                        <!-- Removed customTradeId input as it is now auto-generated -->
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label for="symbol" class="block text-sm font-medium text-gray-700">Symbol/Pair</label>
+                                <select id="symbol" name="symbol" required 
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                                    <option value="" disabled selected>Select a Symbol</option>
+                                    <option value="AUD/USD">AUD/USD</option>
+                                    <option value="EUR/JPY">EUR/JPY</option>
+                                    <option value="EUR/USD">EUR/USD</option>
+                                    <option value="GBP/JPY">GBP/JPY</option>
+                                    <option value="GBP/USD">GBP/USD</option>
+                                    <option value="USD/CAD">USD/CAD</option>
+                                    <option value="USD/CHF">USD/CHF</option>
+                                    <option value="USD/JPY">USD/JPY</option>
+                                    <option value="USOIL">USOIL</option>
+                                    <option value="XAU/USD">XAU/USD (Gold)</option>
+                                    <option value="Other">Other (Custom)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="position" class="block text-sm font-medium text-gray-700">Position</label>
+                                <select id="position" name="position" required 
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                                    <option value="" disabled selected>Select Position Type</option>
+                                    <option value="Long">Long (Buy)</option>
+                                    <option value="Short">Short (Sell)</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div id="custom-symbol-container" class="hidden">
+                            <label for="customSymbol" class="block text-sm font-medium text-gray-700">Enter Custom Symbol</label>
+                            <input type="text" id="customSymbol" name="customSymbol" placeholder="e.g., AAPL, NASDAQ, BTC/USD"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label for="volume" class="block text-sm font-medium text-gray-700">Volume (Lot Size)</label>
+                                <input type="number" id="volume" name="volume" step="0.01" min="0.01" required placeholder="e.g., 0.5"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label for="timeframe" class="block text-sm font-medium text-gray-700">Timeframe</label>
+                                <input type="text" id="timeframe" name="timeframe" required placeholder="e.g., H4, M15"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-4">
+                            <div>
+                                <label for="entryPrice" class="block text-sm font-medium text-gray-700">Entry Price</label>
+                                <input type="number" id="entryPrice" name="entryPrice" step="0.00001" required placeholder="e.g., 1.07500"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label for="exitPrice" class="block text-sm font-medium text-gray-700">Exit Price</label>
+                                <input type="number" id="exitPrice" name="exitPrice" step="0.00001" required placeholder="e.g., 1.08000"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label for="swap" class="block text-sm font-medium text-gray-700">Swap ($)</label>
+                                <input type="number" id="swap" name="swap" step="0.01" value="0.00"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                        </div>
+
+                        <div id="manual-pnl-container" class="grid grid-cols-1 gap-4 hidden">
+                            <div>
+                                <label for="manualGrossPnl" class="block text-sm font-medium text-gray-700">Gross PNL Overwrite ($) <span class="text-xs text-red-500">(Required for all non-major pairs)</span></label>
+                                <input type="number" id="manualGrossPnl" name="manualGrossPnl" step="0.01" required placeholder="Required for complex instruments"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label for="takeProfit" class="block text-sm font-medium text-gray-700">Take Profit</label>
+                                <input type="number" id="takeProfit" name="takeProfit" step="0.00001" placeholder="Optional"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label for="stopLoss" class="block text-sm font-medium text-gray-700">Stop Loss</label>
+                                <input type="number" id="stopLoss" name="stopLoss" step="0.00001" placeholder="Optional"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label for="entryDateTime" class="block text-sm font-medium text-gray-700">Entry Date/Time (sec)</label>
+                                <input type="datetime-local" id="entryDateTime" name="entryDateTime" step="1" required
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label for="exitDateTime" class="block text-sm font-medium text-gray-700">Exit Date/Time (sec)</label>
+                                <input type="datetime-local" id="exitDateTime" name="exitDateTime" step="1" required
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label for="reason" class="block text-sm font-medium text-gray-700">Reason / Takeaways</label>
+                            <textarea id="reason" name="reason" rows="3" placeholder="Why did you take this trade? What did you learn?"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500"></textarea>
+                        </div>
+
+                        <button type="submit" id="trade-submit-button"
+                            class="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition duration-150 transform hover:scale-[1.01] focus:outline-none focus:ring-4 focus:ring-indigo-500 focus:ring-opacity-50">
+                            Log Trade
+                        </button>
+                    </form>
+                </div>
+
+                <div class="lg:col-span-2 p-0">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Current Month's Trades</h2>
+                    
+                    <div id="performance-summary" class="mb-6">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div class="metric-card bg-gray-100 border-l-4 border-indigo-500">
+                                <p class="text-sm font-medium text-gray-500">Total Trades (This Month)</p>
+                                <p class="text-2xl font-bold text-gray-800">0</p>
+                            </div>
+                            <div class="metric-card bg-gray-100 border-l-4 border-indigo-500">
+                                <p class="text-sm font-medium text-gray-500">Win Rate (This Month)</p>
+                                <p class="text-2xl font-bold text-gray-800">0.00%</p>
+                            </div>
+                            <div class="metric-card bg-white border-l-4 border-green-500">
+                                <p class="text-sm font-medium text-gray-500">Winning Trades</p>
+                                <p class="text-2xl font-bold text-green-700">0</p>
+                            </div>
+                            <div class="metric-card bg-white border-l-4 border-red-500">
+                                <p class="text-sm font-medium text-gray-500">Losing Trades</p>
+                                <p class="text-2xl font-bold text-red-700">0</p>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <div id="loading-report" class="hidden text-center p-4 bg-yellow-100 text-yellow-800 rounded-lg mb-4">
+                        Generating PDF Report... Please wait.
+                    </div>
+                    
+                    <div class="flex justify-between items-center mb-4">
+                        <div id="total-net-pnl" class="text-lg font-semibold text-gray-700">
+                            Current Month's Net PNL: $0.00
+                        </div>
+                        
+                        <!-- NEW: Batch Delete Button -->
+                        <button id="batch-delete-button" onclick="window.deleteSelectedTrades()"
+                            class="hidden px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-md transition duration-150">
+                            Delete Selected Trades
+                        </button>
+                    </div>
+
+                    <div id="trade-history-table-container">
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <!-- Header row content will be generated dynamically by renderTradeHistory -->
+                                    </tr>
+                                </thead>
+                                <tbody id="trade-history-body" class="bg-white divide-y divide-gray-200">
+                                    <tr><td colspan="12" class="text-center py-4 text-gray-500">Loading trades...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="monthly-summary-view" class="view-panel hidden grid grid-cols-1 lg:grid-cols-3 gap-8">
+                
+                <div class="lg:col-span-1 p-0 h-fit">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Monthly Performance</h2>
+                    <div id="monthly-summary-list" class="space-y-4">
+                        <p class="text-gray-500 text-center p-4">Loading monthly data...</p>
+                    </div>
+                </div>
+
+                <div class="lg:col-span-2 p-0">
+                    <div id="monthly-detail-container" class="bg-gray-50 p-4 rounded-xl">
+                        <p class="text-gray-500 text-center p-4">Select a month to view trades and summary.</p>
+                    </div>
+                </div>
+            </div>
+
+        </div> </div>
+    
+    <div id="report-template" 
+        class="absolute -z-10 opacity-0 p-8 w-[800px] h-auto"> 
+    </div>
+
+</body>
+</html>
