@@ -60,6 +60,21 @@
         .modal-backdrop {
             background-color: rgba(0, 0, 0, 0.75);
         }
+        
+        /* Ensure datetime-local inputs are wide enough to show seconds */
+        .datetime-input-container input[type="datetime-local"] {
+            /* Increase minimum width slightly to force visibility of seconds */
+            min-width: 200px;
+        }
+
+        /* NEW RULE: Enforce wider layout for datetime fields on larger screens (Trade Log View) */
+        @media (min-width: 1024px) {
+            .trade-date-time-group {
+                /* On large screens (lg), switch to a single column to give max horizontal space */
+                display: grid;
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
     
     <script type="module">
@@ -509,7 +524,7 @@
                     </button>
                 </div>
                 
-                <div class="overflow-x-auto border rounded-lg">
+                    <div class="overflow-x-auto border rounded-lg">
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">
                             <tr>
@@ -2086,14 +2101,17 @@
                             </div>
                         </div>
                         
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label for="entryDateTime" class="block text-sm font-medium text-gray-700">Entry Date/Time (sec)</label>
+                        <!-- MODIFIED: Using grid grid-cols-1 for date/time inputs to give them maximum horizontal space -->
+                        <div class="trade-date-time-group grid grid-cols-1 gap-4">
+                            <div class="datetime-input-container">
+                                <!-- LABEL MODIFIED: Removed (sec) -->
+                                <label for="entryDateTime" class="block text-sm font-medium text-gray-700">Entry Date/Time</label>
                                 <input type="datetime-local" id="entryDateTime" name="entryDateTime" step="1" required placeholder="Date and Time"
                                     class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
                             </div>
-                            <div>
-                                <label for="exitDateTime" class="block text-sm font-medium text-gray-700">Exit Date/Time (sec)</label>
+                            <div class="datetime-input-container">
+                                <!-- LABEL MODIFIED: Removed (sec) -->
+                                <label for="exitDateTime" class="block text-sm font-medium text-gray-700">Exit Date/Time</label>
                                 <input type="datetime-local" id="exitDateTime" name="exitDateTime" step="1" required placeholder="Date and Time"
                                     class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
                             </div>
@@ -2254,7 +2272,7 @@
                                     class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
                             </div>
                             <button type="submit"
-                                class="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition">
+                                class="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition">
                                 Update Password
                             </button>
                         </form>
