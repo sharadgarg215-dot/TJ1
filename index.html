@@ -67,14 +67,20 @@
         import { 
             getAuth, 
             signInWithEmailAndPassword, 
+            createUserWithEmailAndPassword, 
             signInWithCustomToken, 
-            signInAnonymously, // Added signInAnonymously
+            signInAnonymously, 
             onAuthStateChanged, 
             setPersistence, 
             browserSessionPersistence,
-            signOut 
+            signOut,
+            updateProfile, // <-- NEW IMPORT for updating username
+            updatePassword, 
+            EmailAuthProvider, 
+            reauthenticateWithCredential,
+            deleteUser 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // Import setDoc for updating documents
+        
         import { getFirestore, doc, setDoc, addDoc, onSnapshot, collection, query, deleteDoc, serverTimestamp as originalServerTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- START: CONFIGURATION BLOCK (Using Canvas Globals with Fallback) ---
@@ -222,6 +228,12 @@
                 showMessage("Exit Date/Time must be strictly later than Entry Date/Time.", 'error');
                 return null;
             }
+            
+            // Check if position is selected
+            if (!position || position === "") {
+                showMessage("Please select a Position (Long or Short).", 'error');
+                return null;
+            }
 
             const commissionRate = COMMISSION_RATES[symbol] || COMMISSION_RATES['DEFAULT'];
             const commission = vol * commissionRate;
@@ -338,7 +350,7 @@
                 const tradeDataString = JSON.stringify(trade).replace(/"/g, '&quot;');
                 const isChecked = selectedTradeIds.has(trade.id); 
                 
-                // --- REMOVED TRUNCATION LOGIC ---
+                // --- FULL ID ---
                 const fullId = trade.id;
 
                 tableRows += `
@@ -349,14 +361,15 @@
                             </td>` 
                             : ''}
                         <td class="px-4 py-2 text-sm whitespace-nowrap table-left">${entryDateDisplay}</td>
-                        <!-- TRADE ID COLUMN (REMOVED TRUNCATE CLASSES) -->
+                        <!-- TRADE ID COLUMN (FULL ID) -->
                         <td class="px-4 py-2 text-xs font-mono text-gray-500 table-left" title="${trade.id}">${fullId}</td>
                         <td class="px-4 py-2 text-sm font-medium text-gray-900 table-left">${trade.symbol}</td>
                         <td class="px-4 py-2 text-sm text-gray-500 table-left">${trade.timeframe}</td>
                         <td class="px-4 py-2 text-sm table-center">${trade.position.charAt(0)}</td>
                         <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.volume).toFixed(2)}</td>
-                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.entryPrice).toFixed(5)}</td>
-                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.exitPrice).toFixed(5)}</td>
+                        <!-- UPDATED: Removed toFixed(5) to show entered precision -->
+                        <td class="px-4 py-2 text-sm table-right">${trade.entryPrice}</td>
+                        <td class="px-4 py-2 text-sm table-right">${trade.exitPrice}</td>
                         <td class="px-4 py-2 text-sm table-right">${trade.pips || 'N/A'}</td>
                         <td class="px-4 py-2 text-sm ${netPnlColor} table-right">$${trade.netPnl}</td>
                         <td class="px-4 py-2 text-center flex space-x-1 justify-center items-center">
@@ -405,7 +418,7 @@
                 } else {
                     tableHeaderRow.innerHTML += `
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Trade ID</th> <!-- Added Trade ID header -->
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Trade ID</th> 
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Pair</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">TF</th>
                         <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">P/S</th>
@@ -424,25 +437,26 @@
             const detailContainer = document.getElementById('monthly-detail-container');
             
             let tableRows = monthData.trades.map(trade => {
-                const netPnlColor = trade.netPnl > 0 ? 'text-green-600 font-bold' : (trade.netPnl < 0 ? 'text-red-600 font-bold' : 'text-gray-500');
+                const netPnlColor = parseFloat(trade.netPnl) > 0 ? 'text-green-600 font-bold' : (trade.netPnl < 0 ? 'text-red-600 font-bold' : 'text-gray-500');
                 const entryDate = trade.entryDateTime ? new Date(trade.entryDateTime).toLocaleString('en-US', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
                 
                 const tradeDataString = JSON.stringify(trade).replace(/"/g, '&quot;');
                 
-                // --- REMOVED TRUNCATION LOGIC ---
+                // --- FULL ID ---
                 const fullId = trade.id;
 
 
                 return `
                     <tr class="bg-white border-b hover:bg-gray-50">
                         <td class="px-4 py-2 text-sm whitespace-nowrap table-left">${entryDate.split(',')[0]}</td>
-                        <!-- TRADE ID COLUMN (REMOVED TRUNCATE CLASSES) -->
+                        <!-- TRADE ID COLUMN (FULL ID) -->
                         <td class="px-4 py-2 text-xs font-mono text-gray-500 table-left" title="${trade.id}">${fullId}</td>
                         <td class="px-4 py-2 text-sm font-medium text-gray-900 table-left">${trade.symbol}</td>
                         <td class="px-4 py-2 text-sm table-center">${trade.position.charAt(0)}</td>
                         <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.volume).toFixed(2)}</td>
-                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.entryPrice).toFixed(5)}</td>
-                        <td class="px-4 py-2 text-sm table-right">${parseFloat(trade.exitPrice).toFixed(5)}</td>
+                         <!-- UPDATED: Removed toFixed(5) to show entered precision -->
+                        <td class="px-4 py-2 text-sm table-right">${trade.entryPrice}</td>
+                        <td class="px-4 py-2 text-sm table-right">${trade.exitPrice}</td>
                         <td class="px-4 py-2 text-sm ${netPnlColor} table-right">$${trade.netPnl}</td>
                         <td class="px-4 py-2 text-center flex space-x-1 justify-center items-center">
                             <button onclick="window.exportReport('${trade.id}', ${tradeDataString})" 
@@ -641,6 +655,235 @@
             window.renderMonthlySummaries(); // Ensure this is called with window if necessary, but fixed scope should handle it
         }
 
+        /**
+         * Handles the password change form submission.
+         */
+        window.changePassword = async (e) => {
+            e.preventDefault();
+            const currentPassword = document.getElementById('currentPassword').value; 
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const user = auth.currentUser;
+
+            if (!user || user.isAnonymous || !user.email) {
+                showMessage("Password change is only available for logged-in email/password users.", 'error');
+                return;
+            }
+
+            if (!currentPassword) {
+                showMessage("Current password is required for verification.", 'error');
+                return;
+            }
+
+            if (newPassword.length < 6) {
+                showMessage("New password must be at least 6 characters long.", 'error');
+                return;
+            }
+
+            if (newPassword !== confirmPassword) {
+                showMessage("New passwords do not match.", 'error');
+                return;
+            }
+            
+            // --- 1. Attempt Reauthentication with Current Password ---
+            try {
+                // Create a credential object from the user's current email and the provided current password
+                const credential = EmailAuthProvider.credential(user.email, currentPassword);
+                
+                // Reauthenticate the user to refresh the security token
+                await reauthenticateWithCredential(user, credential);
+
+                // --- 2. If reauthentication succeeds, update the password ---
+                await updatePassword(user, newPassword);
+                
+                showMessage("Password updated successfully! You may need to log in again.", 'success');
+                // Clear the form
+                document.getElementById('password-change-form').reset();
+            } catch (error) {
+                console.error("Password update failed:", error);
+                
+                let message;
+                if (error.code === 'auth/wrong-password') {
+                    message = "Verification failed: Incorrect current password.";
+                } else if (error.code === 'auth/user-mismatch') {
+                    message = "Verification failed: User mismatch.";
+                } else {
+                    message = `Password update failed: ${error.message}`;
+                }
+                showMessage(message, 'error');
+            }
+        };
+        
+        // --- NEW: Handle Username Update ---
+        window.changeUsername = async (e) => {
+            e.preventDefault();
+            const newUsername = document.getElementById('newUsername').value.trim();
+            const user = auth.currentUser;
+
+            if (!user || user.isAnonymous) {
+                showMessage("You must be logged in to update your username.", 'error');
+                return;
+            }
+            if (newUsername.length < 3) {
+                showMessage("Username must be at least 3 characters long.", 'error');
+                return;
+            }
+            if (newUsername === user.displayName) {
+                 showMessage("Username is already set to that value.", 'info');
+                 return;
+            }
+
+            try {
+                await updateProfile(user, { displayName: newUsername });
+                showMessage("Username updated successfully!", 'success');
+                document.getElementById('username-change-form').reset();
+                // Trigger auth state change manually to update UI display immediately
+                onAuthStateChanged(auth, (u) => { 
+                    if (u) {
+                        document.getElementById('username-display').textContent = u.displayName || 'Set Username';
+                        
+                        // Update header display immediately
+                        const headerDisplay = document.getElementById('header-username-display');
+                        if (headerDisplay) {
+                             headerDisplay.textContent = `Welcome back, ${u.displayName || 'Trader'}!`;
+                        }
+                    }
+                }, true);
+                
+            } catch (error) {
+                console.error("Username update failed:", error);
+                showMessage(`Username update failed: ${error.message}`, 'error');
+            }
+        };
+
+
+        // --- AUTHENTICATION HANDLERS ---
+        
+        // --- NEW: Account Deletion Functions ---
+        window.showDeleteAccountConfirm = () => {
+            const user = auth.currentUser;
+            // Only allow deletion for explicitly authenticated users
+            if (!user || user.isAnonymous || !user.email) {
+                showMessage("Account deletion is only available for email/password users.", 'error');
+                return;
+            }
+            document.getElementById('delete-account-modal').classList.remove('hidden');
+            document.getElementById('delete-account-password').value = ''; // Clear password field
+        };
+
+        window.cancelAccountDelete = () => {
+            document.getElementById('delete-account-modal').classList.add('hidden');
+        };
+
+        window.executeDeleteAccount = async (e) => {
+            e.preventDefault();
+            const password = document.getElementById('delete-account-password').value;
+            const user = auth.currentUser;
+
+            if (!user || user.isAnonymous || !user.email) {
+                showMessage("Authentication error. Cannot delete account.", 'error');
+                return;
+            }
+
+            if (!password) {
+                showMessage("Password is required to confirm account deletion.", 'error');
+                return;
+            }
+            
+            document.getElementById('delete-account-modal').classList.add('hidden'); // Hide modal immediately
+
+            try {
+                // 1. Reauthenticate user with password
+                const credential = EmailAuthProvider.credential(user.email, password);
+                await reauthenticateWithCredential(user, credential);
+                
+                // 2. Delete the user account
+                await deleteUser(user);
+
+                showMessage("Account and all associated trades deleted successfully. You have been logged out.", 'success');
+                // onAuthStateChanged listener handles UI cleanup after successful delete/logout
+                
+            } catch (error) {
+                console.error("Account deletion failed:", error);
+                
+                let message;
+                if (error.code === 'auth/wrong-password') {
+                    message = "Deletion failed: Incorrect password provided.";
+                    document.getElementById('delete-account-modal').classList.remove('hidden'); // Re-show for retry
+                } else if (error.code === 'auth/requires-recent-login') {
+                    message = "Deletion failed: Please log out and log in again to delete your account.";
+                } else {
+                    message = `Account deletion failed: ${error.message}`;
+                }
+                showMessage(message, 'error');
+            }
+        };
+        // --- END: Account Deletion Functions ---
+
+
+        // Function to toggle between Login and Signup forms
+        window.toggleAuthMode = (mode) => {
+            const loginSection = document.getElementById('login-section');
+            const signupSection = document.getElementById('signup-section');
+            const title = document.getElementById('auth-title');
+
+            if (mode === 'signup') {
+                loginSection.classList.add('hidden');
+                signupSection.classList.remove('hidden');
+                title.textContent = 'Create New Account';
+            } else {
+                signupSection.classList.add('hidden');
+                loginSection.classList.remove('hidden');
+                title.textContent = 'Private Journal Login';
+            }
+            // Clear both forms when switching mode
+            document.getElementById('login-form').reset();
+            document.getElementById('signup-form').reset();
+        };
+
+        // Handle Signup form submission
+        window.handleSignup = async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('signup-email').value;
+            const password = document.getElementById('signup-password').value;
+            const confirmPassword = document.getElementById('signup-confirm-password').value;
+            const username = document.getElementById('signup-username').value.trim(); // NEW
+
+            if (password !== confirmPassword) {
+                showMessage("Passwords do not match.", 'error');
+                return;
+            }
+            if (password.length < 6) {
+                showMessage("Password must be at least 6 characters long.", 'error');
+                return;
+            }
+            if (username.length < 3) {
+                 showMessage("Username must be at least 3 characters long.", 'error');
+                 return;
+            }
+
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                
+                // Set the display name immediately after creation
+                await updateProfile(userCredential.user, { displayName: username });
+                
+                showMessage("Account created successfully! You are now logged in.", 'success');
+                // The onAuthStateChanged listener handles login success
+            } catch (error) {
+                console.error("Signup failed:", error.code, error.message);
+                let message;
+                if (error.code === 'auth/email-already-in-use') {
+                    message = "Signup Failed: The email address is already in use.";
+                } else if (error.code === 'auth/invalid-email') {
+                    message = "Signup Failed: The email address is not valid.";
+                } else {
+                    message = `Signup Failed: ${error.message}`;
+                }
+                showMessage(message, 'error');
+            }
+        };
+
         // --- MAIN INITIALIZATION BLOCK ---
 
         try {
@@ -689,28 +932,68 @@
             // --- AUTH STATE LISTENER ---
             onAuthStateChanged(auth, async (user) => {
                 const loginOverlay = document.getElementById('login-overlay');
+                const passwordFormContainer = document.getElementById('password-change-container');
+                const usernameFormContainer = document.getElementById('username-change-container'); 
+                const togglePasswordButton = document.getElementById('toggle-password-form');
+                const toggleUsernameButton = document.getElementById('toggle-username-form'); 
+                const deleteAccountButton = document.getElementById('delete-account-button'); 
                 
                 // Define default table/summary content messages
                 const defaultTableContent = '<tr><td colspan="12" class="text-center py-4 text-red-500 font-bold">Please log in to view trades.</td></tr>';
                 const defaultSummaryContent = '<p class="text-gray-500 text-center p-4">Please log in to view summaries.</p>';
+                
+                let userEmail = 'Not Logged In (Anonymous)';
+                let userName = 'N/A'; 
+                let isExplicitlyLoggedIn = false;
 
                 if (user && !user.isAnonymous) {
                     // User is explicitly logged in
                     userId = user.uid;
+                    isExplicitlyLoggedIn = true;
+                    userEmail = user.email || 'N/A';
+                    userName = user.displayName || 'Set Username'; 
                     loginOverlay.classList.add('hidden'); 
                     document.getElementById('logout-button').classList.remove('hidden');
                     isAuthReady = true;
+                    
+                    // Show/Hide buttons based on email login status
+                    if (user.email) {
+                         togglePasswordButton.classList.remove('hidden');
+                         toggleUsernameButton.classList.remove('hidden'); 
+                         deleteAccountButton.classList.remove('hidden'); 
+                    } else {
+                         togglePasswordButton.classList.add('hidden');
+                         toggleUsernameButton.classList.add('hidden'); 
+                         deleteAccountButton.classList.add('hidden'); 
+                    }
+                    // Crucially, hide the actual form containers until the button is clicked
+                    passwordFormContainer.classList.add('hidden'); 
+                    usernameFormContainer.classList.add('hidden'); 
+
 
                 } else if (user && user.isAnonymous) {
                      // User is logged in anonymously (usually pending explicit login)
                      userId = user.uid;
+                     isExplicitlyLoggedIn = false;
+                     userEmail = 'Anonymous User';
+                     userName = 'Anonymous User'; 
                      loginOverlay.classList.remove('hidden');
                      document.getElementById('logout-button').classList.add('hidden');
                      isAuthReady = true;
+                     passwordFormContainer.classList.add('hidden');
+                     usernameFormContainer.classList.add('hidden'); 
+                     togglePasswordButton.classList.add('hidden');
+                     toggleUsernameButton.classList.add('hidden'); 
+                     deleteAccountButton.classList.add('hidden'); 
+                     
+                     // Ensure overlay shows Login mode when coming from anonymous state
+                     window.toggleAuthMode('login');
 
                 } else {
                     // No user logged in
                     userId = null;
+                    isExplicitlyLoggedIn = false;
+                    userName = 'Not Authenticated'; 
                     loginOverlay.classList.remove('hidden'); 
                     document.getElementById('logout-button').classList.add('hidden');
                     isAuthReady = true; 
@@ -720,10 +1003,55 @@
                     document.getElementById('monthly-summary-list').innerHTML = defaultSummaryContent;
                     document.getElementById('monthly-detail-container').innerHTML = defaultSummaryContent;
                     document.getElementById('total-net-pnl').innerHTML = `Current Month's Net PNL: <span class="text-gray-500 font-extrabold">$0.00</span>`;
+                    passwordFormContainer.classList.add('hidden');
+                    usernameFormContainer.classList.add('hidden'); 
+                    togglePasswordButton.classList.add('hidden');
+                    toggleUsernameButton.classList.add('hidden'); 
+                    deleteAccountButton.classList.add('hidden'); 
+                    
+                    // Show Login form on the overlay
+                    window.toggleAuthMode('login');
                 }
                     
                 window.userId = userId;
-                document.getElementById('user-id-display').textContent = `User ID: ${userId || 'Not Authenticated'}`;
+                
+                // Update header username with greeting
+                // MODIFIED: Simplified the greeting for "Anonymous" and "Not Authenticated"
+                const greetingName = (isExplicitlyLoggedIn && userName !== 'Set Username') ? userName : 'Trader';
+                document.getElementById('header-username-display').textContent = `Welcome back, ${greetingName}!`;
+                
+                // Remove user-id-display from header
+                const userIdDisplay = document.getElementById('user-id-display');
+                if (userIdDisplay) {
+                     userIdDisplay.remove(); // Removed the element completely from the DOM
+                }
+
+                // Update Profile View 
+                const profileContainer = document.getElementById('profile-details');
+                if (profileContainer) {
+                    profileContainer.innerHTML = `
+                        <div class="space-y-4">
+                            <div class="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                                <p class="text-sm font-medium text-gray-500">Authentication Status</p>
+                                <p class="text-lg font-bold ${isExplicitlyLoggedIn ? 'text-green-600' : 'text-red-600'}">
+                                    ${isExplicitlyLoggedIn ? 'Authenticated' : 'Requires Login'}
+                                </p>
+                            </div>
+                            <div class="p-4 bg-white border border-gray-200 rounded-lg">
+                                <p class="text-sm font-medium text-gray-500">Username</p>
+                                <p id="username-display" class="text-md font-semibold text-indigo-700">${userName}</p>
+                            </div>
+                            <div class="p-4 bg-white border border-gray-200 rounded-lg">
+                                <p class="text-sm font-medium text-gray-500">Email Address</p>
+                                <p class="text-md font-semibold text-gray-800">${userEmail}</p>
+                            </div>
+                            <div class="p-4 bg-white border border-gray-200 rounded-lg">
+                                <p class="text-sm font-medium text-gray-500">User ID</p>
+                                <p class="text-md font-mono text-gray-800 break-all">${userId || 'N/A'}</p>
+                            </div>
+                        </div>
+                    `;
+                }
                 
                 // CRITICAL: Call loadTrades only when authentication state has stabilized AND a user ID (even anonymous) is present
                 if (userId && isAuthReady) {
@@ -734,7 +1062,7 @@
         } catch (e) {
             console.error("Failed to initialize Firebase:", e);
             document.getElementById('login-overlay').classList.remove('hidden');
-            document.getElementById('user-id-display').textContent = `User ID: Not Available (Check Console)`;
+            // Removed initial display of user ID here as well
         }
 
         // 6. DATA LOADING (Real-time Snapshot)
@@ -807,6 +1135,12 @@
             formTitle.textContent = 'Log New Trade';
             submitButton.textContent = 'Log Trade';
             document.getElementById('symbol')?.dispatchEvent(new Event('change')); // To hide/show manual PNL
+            
+            // Explicitly set the position selection to the placeholder
+            const positionSelect = document.getElementById('position');
+            if (positionSelect) {
+                positionSelect.value = '';
+            }
         };
 
 
@@ -925,12 +1259,13 @@
             // Ensure numbers are parsed and formatted for input consistency
             tradeForm.volume.value = parseFloat(tradeData.volume).toFixed(2);
             
-            tradeForm.entryPrice.value = parseFloat(tradeData.entryPrice).toFixed(5);
-            tradeForm.exitPrice.value = parseFloat(tradeData.exitPrice).toFixed(5);
+            // Use raw string values for display in edit form
+            tradeForm.entryPrice.value = tradeData.entryPrice;
+            tradeForm.exitPrice.value = tradeData.exitPrice;
             
             // Optional fields
-            tradeForm.takeProfit.value = tradeData.takeProfit ? parseFloat(tradeData.takeProfit).toFixed(5) : '';
-            tradeForm.stopLoss.value = tradeData.stopLoss ? parseFloat(tradeData.stopLoss).toFixed(5) : '';
+            tradeForm.takeProfit.value = tradeData.takeProfit || '';
+            tradeForm.stopLoss.value = tradeData.stopLoss || '';
             tradeForm.swap.value = parseFloat(tradeData.swap).toFixed(2);
             tradeForm.manualGrossPnl.value = tradeData.manualGrossPnl || '';
             
@@ -959,8 +1294,8 @@
             const autoCalculatedSymbols = [
                 'XAU/USD', 
                 'AUD/USD', 
-                'GBP/USD', 
                 'EUR/USD',
+                'GBP/USD'
             ]; 
 
             const toggleConditionalInputs = (selectedSymbol) => {
@@ -1035,12 +1370,46 @@
             };
             
             window.showView('trade-log-view');
+            
+            // Set initial value for position select after DOM content loaded
+            const positionSelect = document.getElementById('position');
+            if (positionSelect) {
+                positionSelect.value = '';
+            }
         });
+        
+        // NEW: Toggle functions for forms
+        window.togglePasswordForm = () => {
+            const container = document.getElementById('password-change-container');
+            container.classList.toggle('hidden');
+            document.getElementById('password-change-form').reset(); 
+        };
+        
+        window.toggleUsernameForm = () => {
+            const container = document.getElementById('username-change-container');
+            container.classList.toggle('hidden');
+            const user = auth.currentUser;
+            if (user && !container.classList.contains('hidden')) {
+                document.getElementById('newUsername').value = user.displayName || '';
+            }
+        };
+
 
         // NEW: Batch Selection and Deletion Functions
         window.toggleSelectAll = (checked) => {
             selectedTradeIds.clear();
             // Select checkboxes from the dedicated container
+            const trades = currentTrades.filter(t => {
+                const now = new Date();
+                const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                const date = t.entryDateTime ? new Date(t.entryDateTime) : (t.timestamp ? new Date(t.timestamp.seconds * 1000) : null);
+                if (!date) return false;
+                const tradeMonthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                return tradeMonthKey === currentMonthKey;
+            });
+
+            if (trades.length <= 2) return; // Prevent selection if batch delete is not enabled
+
             const checkboxes = document.querySelectorAll('#trade-history-table-container .trade-checkbox');
             checkboxes.forEach(checkbox => {
                 checkbox.checked = checked;
@@ -1221,7 +1590,7 @@
                 const entryDate = trade.entryDateTime ? new Date(trade.entryDateTime) : (trade.timestamp ? new Date(trade.timestamp.seconds * 1000) : null);
                 const formattedDate = entryDate ? `${String(entryDate.getDate()).padStart(2, '0')}/${String(entryDate.getMonth() + 1).padStart(2, '0')}/${entryDate.getFullYear()}` : 'N/A';
                 
-                // --- REMOVED TRUNCATION LOGIC ---
+                // --- FULL ID ---
                 const fullId = trade.id;
 
 
@@ -1231,8 +1600,8 @@
                         <td style="text-align:left; font-size: 10px; font-weight: 700; color: #6b7280;">${fullId}</td>
                         <td style="text-align:left; font-size: 10px; font-weight: bold;">${trade.symbol}</td>
                         <td style="text-align:center; font-size: 10px;">${trade.position.charAt(0)}</td>
-                        <td style="text-align:right; font-size: 10px;">${parseFloat(trade.entryPrice).toFixed(5)}</td>
-                        <td style="text-align:right; font-size: 10px;">${parseFloat(trade.exitPrice).toFixed(5)}</td>
+                        <td style="text-align:right; font-size: 10px;">${trade.entryPrice}</td>
+                        <td style="text-align:right; font-size: 10px;">${trade.exitPrice}</td>
                         <td style="text-align:right; font-size: 10px;">$${trade.grossPnl}</td>
                         <td style="text-align:right; font-size: 10px;">$${trade.commission}</td>
                         <td style="text-align:right; font-size: 10px;">$${trade.swap}</td>
@@ -1360,11 +1729,11 @@
 
                         <div class="report-grid-box">
                             <span class="text-xs font-bold uppercase text-gray-600">ENTRY PRICE</span>
-                            <span class="text-md font-semibold text-gray-900">${parseFloat(tradeData.entryPrice).toFixed(5)}</span>
+                            <span class="text-md font-semibold text-gray-900">${tradeData.entryPrice}</span>
                         </div>
                         <div class="report-grid-box">
                             <span class="text-xs font-bold uppercase text-gray-600">EXIT PRICE</span>
-                            <span class="text-md font-semibold text-gray-900">${parseFloat(tradeData.exitPrice).toFixed(5)}</span>
+                            <span class="text-md font-semibold text-gray-900">${tradeData.exitPrice}</span>
                         </div>
                         <div class="report-grid-box">
                             <span class="text-xs font-bold uppercase text-gray-600">LOT SIZE</span>
@@ -1373,11 +1742,11 @@
 
                         <div class="report-grid-box">
                             <span class="text-xs font-bold uppercase text-gray-600">TAKE PROFIT</span>
-                            <span class="text-md font-semibold text-blue-600">${parseFloat(tradeData.takeProfit).toFixed(5)}</span>
+                            <span class="text-md font-semibold text-blue-600">${tradeData.takeProfit || 'N/A'}</span>
                         </div>
                         <div class="report-grid-box">
                             <span class="text-xs font-bold uppercase text-gray-600">STOP LOSS</span>
-                            <span class="text-md font-semibold text-red-600">${parseFloat(tradeData.stopLoss).toFixed(5)}</span>
+                            <span class="text-md font-semibold text-red-600">${tradeData.stopLoss || 'N/A'}</span>
                         </div>
                         <div class="report-grid-box">
                             <span class="text-xs font-bold uppercase text-gray-600">DURATION</span>
@@ -1441,28 +1810,111 @@
     <!-- Login Overlay -->
     <div id="login-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-95 z-40 flex items-center justify-center hidden">
         <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm">
-            <h2 class="text-2xl font-extrabold text-indigo-700 mb-6 text-center">Private Journal Login</h2>
-            <form id="login-form" class="space-y-4">
-                <div>
-                    <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
-                    <input type="email" id="email" required
-                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+            <h2 id="auth-title" class="text-2xl font-extrabold text-indigo-700 mb-6 text-center">Private Journal Login</h2>
+            
+            <!-- Login Section -->
+            <div id="login-section">
+                <form id="login-form" class="space-y-4">
+                    <div>
+                        <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                        <input type="email" id="email" required
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                        <input type="password" id="password" required
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                    </div>
+                    <button type="submit"
+                            class="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition">
+                        Sign In
+                    </button>
+                </form>
+                <div class="mt-4 text-center">
+                    <button onclick="window.toggleAuthMode('signup')"
+                            class="text-sm text-indigo-600 hover:text-indigo-800 font-semibold transition">
+                        Need an account? Create Account
+                    </button>
                 </div>
-                <div>
-                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
-                    <input type="password" id="password" required
-                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+
+            <!-- Signup Section (Hidden by Default) -->
+            <div id="signup-section" class="hidden">
+                <form id="signup-form" onsubmit="window.handleSignup(event)" class="space-y-4">
+                    <!-- NEW USERNAME FIELD -->
+                    <div>
+                        <label for="signup-username" class="block text-sm font-medium text-gray-700">Username (Required)</label>
+                        <input type="text" id="signup-username" required minlength="3" placeholder="e.g., TraderX"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                    </div>
+                    <!-- END NEW USERNAME FIELD -->
+                    
+                    <div>
+                        <label for="signup-email" class="block text-sm font-medium text-gray-700">Email</label>
+                        <input type="email" id="signup-email" required
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label for="signup-password" class="block text-sm font-medium text-gray-700">Password (min 6 chars)</label>
+                        <input type="password" id="signup-password" required minlength="6"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label for="signup-confirm-password" class="block text-sm font-medium text-gray-700">Confirm Password</label>
+                        <input type="password" id="signup-confirm-password" required minlength="6"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                    </div>
+                    <button type="submit"
+                            class="w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition">
+                        Create Account
+                    </button>
+                </form>
+                <div class="mt-4 text-center">
+                    <button onclick="window.toggleAuthMode('login')"
+                            class="text-sm text-indigo-600 hover:text-indigo-800 font-semibold transition">
+                        Already have an account? Sign In
+                    </button>
                 </div>
-                <button type="submit"
-                        class="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition">
-                    Sign In
-                </button>
-                <p class="text-xs text-red-500 text-center mt-2">Access is restricted to the journal owner only.</p>
+            </div>
+
+            <p class="text-xs text-red-500 text-center mt-6">All account data is stored privately in Firebase Firestore.</p>
+        </div>
+    </div>
+    
+    <!-- Account Deletion Confirmation Modal -->
+    <div id="delete-account-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-50 flex items-center justify-center hidden modal-backdrop">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-md transform transition-all">
+            <h3 class="text-xl font-bold text-red-600 mb-4 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                Confirm Account Deletion
+            </h3>
+            <p class="text-gray-700 mb-4">
+                **WARNING:** This action is irreversible and will permanently delete your account and **ALL** associated trade data.
+            </p>
+            <form onsubmit="window.executeDeleteAccount(event)" class="space-y-4">
+                 <div>
+                    <label for="delete-account-password" class="block text-sm font-medium text-gray-700">Enter Password to Confirm</label>
+                    <input type="password" id="delete-account-password" required
+                            class="mt-1 block w-full rounded-md border-red-300 shadow-sm p-2 border focus:border-red-500 focus:ring-red-500">
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button type="button" onclick="window.cancelAccountDelete()"
+                            class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold rounded-lg transition">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition">
+                        Delete Account Permanently
+                    </button>
+                </div>
             </form>
         </div>
     </div>
 
-    <!-- Delete Confirmation Modal -->
+
+    <!-- Delete Confirmation Modal (Trade Deletion) -->
     <div id="delete-confirm-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-50 flex items-center justify-center hidden modal-backdrop">
         <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-md transform transition-all">
             <h3 class="text-xl font-bold text-red-600 mb-4 flex items-center">
@@ -1493,7 +1945,9 @@
         <header class="mb-8 p-4 bg-white shadow-lg rounded-xl flex justify-between items-center">
             <div>
                 <h1 class="text-3xl font-extrabold text-indigo-700">Ananta Horizon Trading Journal</h1>
-                <p id="user-id-display" class="text-sm text-gray-500 mt-1 truncate">User ID: Loading...</p>
+                <!-- UPDATED: Added "Welcome back" greeting logic in JS, removed old P tags -->
+                <p id="header-username-display" class="text-lg font-semibold text-gray-700 mt-1">Loading...</p>
+                <!-- Removed user-id-display from header -->
             </div>
             <button id="logout-button" onclick="window.logout()" class="hidden py-2 px-4 bg-red-500 hover:bg-red-700 text-white font-bold rounded-lg transition">
                 Log Out
@@ -1509,6 +1963,10 @@
                 <button class="tab-button px-3 py-2 text-gray-500 hover:text-indigo-700 transition duration-150"
                         data-view="monthly-summary-view" onclick="showView('monthly-summary-view')">
                     Monthly Summary
+                </button>
+                <button class="tab-button px-3 py-2 text-gray-500 hover:text-indigo-700 transition duration-150"
+                        data-view="profile-view" onclick="showView('profile-view')">
+                    Profile
                 </button>
             </nav>
         </div>
@@ -1548,7 +2006,8 @@
                                 <label for="position" class="block text-sm font-medium text-gray-700">Position</label>
                                 <select id="position" name="position" required 
                                     class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
-                                    <option value="" disabled selected>Select Position Type</option>
+                                    <!-- MODIFIED: Added disabled/selected empty option for position -->
+                                    <option value="" disabled selected>Select Position</option>
                                     <option value="Long">Long (Buy)</option>
                                     <option value="Short">Short (Sell)</option>
                                 </select>
@@ -1616,12 +2075,12 @@
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <label for="entryDateTime" class="block text-sm font-medium text-gray-700">Entry Date/Time (sec)</label>
-                                <input type="datetime-local" id="entryDateTime" name="entryDateTime" step="1" required
+                                <input type="datetime-local" id="entryDateTime" name="entryDateTime" step="1" required placeholder="Date and Time"
                                     class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
                             </div>
                             <div>
                                 <label for="exitDateTime" class="block text-sm font-medium text-gray-700">Exit Date/Time (sec)</label>
-                                <input type="datetime-local" id="exitDateTime" name="exitDateTime" step="1" required
+                                <input type="datetime-local" id="exitDateTime" name="exitDateTime" step="1" required placeholder="Date and Time"
                                     class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
                             </div>
                         </div>
@@ -1712,6 +2171,89 @@
                     </div>
                 </div>
             </div>
+
+            <!-- NEW: PROFILE VIEW PANEL -->
+            <div id="profile-view" class="view-panel hidden p-4">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Account Profile</h2>
+                <div class="max-w-xl mx-auto">
+                    <div id="profile-details" class="space-y-4 mb-8">
+                        <!-- Content rendered dynamically by onAuthStateChanged listener -->
+                        <div class="p-8 text-center text-gray-500">Loading profile details...</div>
+                    </div>
+                    
+                    <div class="flex flex-col space-y-4">
+                        <!-- NEW: TOGGLE BUTTON for Username Form -->
+                         <button id="toggle-username-form" onclick="window.toggleUsernameForm()" 
+                            class="hidden w-full py-2 px-4 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-xl transition shadow-md">
+                            Change Username
+                        </button>
+                        
+                        <!-- NEW: TOGGLE BUTTON for Password Form -->
+                        <button id="toggle-password-form" onclick="window.togglePasswordForm()" 
+                            class="hidden w-full py-2 px-4 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-xl transition shadow-md">
+                            Change Password
+                        </button>
+                        
+                        <!-- NEW: DELETE ACCOUNT BUTTON -->
+                        <button id="delete-account-button" onclick="window.showDeleteAccountConfirm()" 
+                            class="hidden w-full py-2 px-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition shadow-md">
+                            Delete Account
+                        </button>
+                    </div>
+                    
+                    <!-- NEW: Username Change Form -->
+                    <div id="username-change-container" class="hidden mt-8 border border-indigo-200 p-4 rounded-xl bg-white shadow-lg">
+                        <h3 class="text-xl font-bold text-indigo-700 mb-4">Change Username</h3>
+                        <form id="username-change-form" onsubmit="window.changeUsername(event)" class="space-y-4">
+                            <div>
+                                <label for="newUsername" class="block text-sm font-medium text-gray-700">New Username</label>
+                                <input type="text" id="newUsername" name="newUsername" required minlength="3" placeholder="Enter new username"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <button type="submit"
+                                class="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition">
+                                Update Username
+                            </button>
+                        </form>
+                    </div>
+
+                    <div id="password-change-container" class="hidden mt-8 border border-red-200 p-4 rounded-xl bg-white shadow-lg">
+                        <h3 class="text-xl font-bold text-indigo-700 mb-4">Change Password</h3>
+                        <p class="text-sm text-red-500 mb-4">You must enter your current password to verify your identity before changing it.</p>
+                        <form id="password-change-form" onsubmit="window.changePassword(event)" class="space-y-4">
+                            <!-- Current Password Input -->
+                            <div>
+                                <label for="currentPassword" class="block text-sm font-medium text-gray-700">Current Password</label>
+                                <input type="password" id="currentPassword" name="currentPassword" required 
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <!-- Existing New Password Input -->
+                            <div>
+                                <label for="newPassword" class="block text-sm font-medium text-gray-700">New Password (min 6 chars)</label>
+                                <input type="password" id="newPassword" name="newPassword" required minlength="6"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <!-- Existing Confirm Password Input -->
+                            <div>
+                                <label for="confirmPassword" class="block text-sm font-medium text-gray-700">Confirm New Password</label>
+                                <input type="password" id="confirmPassword" name="confirmPassword" required minlength="6"
+                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <button type="submit"
+                                class="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition">
+                                Update Password
+                            </button>
+                        </form>
+                    </div>
+
+                    <div class="mt-8 pt-4 border-t border-gray-200">
+                        <p class="text-sm text-gray-600">
+                            *Note: For security reasons, sensitive account management (like password changes) must be done through your main Firebase project console or service provider.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <!-- END NEW: PROFILE VIEW PANEL -->
 
         </div> </div>
     
