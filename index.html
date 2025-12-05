@@ -932,6 +932,7 @@
             // --- AUTH STATE LISTENER ---
             onAuthStateChanged(auth, async (user) => {
                 const loginOverlay = document.getElementById('login-overlay');
+                const mainContainer = document.getElementById('main-app-container'); // NEW
                 const passwordFormContainer = document.getElementById('password-change-container');
                 const usernameFormContainer = document.getElementById('username-change-container'); 
                 const togglePasswordButton = document.getElementById('toggle-password-form');
@@ -952,7 +953,11 @@
                     isExplicitlyLoggedIn = true;
                     userEmail = user.email || 'N/A';
                     userName = user.displayName || 'Set Username'; 
+                    
+                    // SHOW APP, HIDE OVERLAY
                     loginOverlay.classList.add('hidden'); 
+                    mainContainer.classList.remove('hidden'); // NEW: Show main content
+                    
                     document.getElementById('logout-button').classList.remove('hidden');
                     isAuthReady = true;
                     
@@ -977,7 +982,11 @@
                      isExplicitlyLoggedIn = false;
                      userEmail = 'Anonymous User';
                      userName = 'Anonymous User'; 
+                     
+                     // HIDE APP, SHOW OVERLAY
                      loginOverlay.classList.remove('hidden');
+                     mainContainer.classList.add('hidden'); // NEW: Hide main content
+                     
                      document.getElementById('logout-button').classList.add('hidden');
                      isAuthReady = true;
                      passwordFormContainer.classList.add('hidden');
@@ -994,7 +1003,11 @@
                     userId = null;
                     isExplicitlyLoggedIn = false;
                     userName = 'Not Authenticated'; 
+                    
+                    // HIDE APP, SHOW OVERLAY
                     loginOverlay.classList.remove('hidden'); 
+                    mainContainer.classList.add('hidden'); // NEW: Hide main content
+                    
                     document.getElementById('logout-button').classList.add('hidden');
                     isAuthReady = true; 
                     
@@ -1808,7 +1821,7 @@
     <div id="message-container" class="fixed top-4 right-4 z-50"></div>
 
     <!-- Login Overlay -->
-    <div id="login-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-95 z-40 flex items-center justify-center hidden">
+    <div id="login-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-95 z-40 flex items-center justify-center">
         <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm">
             <h2 id="auth-title" class="text-2xl font-extrabold text-indigo-700 mb-6 text-center">Private Journal Login</h2>
             
@@ -1940,7 +1953,8 @@
         </div>
     </div>
 
-    <div class="max-w-7xl mx-auto">
+    <!-- START: Main Application Container (Visibility toggled by JS) -->
+    <div id="main-app-container" class="max-w-7xl mx-auto">
         
         <header class="mb-8 p-4 bg-white shadow-lg rounded-xl flex justify-between items-center">
             <div>
@@ -2256,6 +2270,7 @@
             <!-- END NEW: PROFILE VIEW PANEL -->
 
         </div> </div>
+    <!-- END: Main Application Container -->
     
     <div id="report-template" 
         class="absolute -z-10 opacity-0 p-8 w-[800px] h-auto"> 
